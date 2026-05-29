@@ -1,0 +1,20 @@
+[project]
+name = "mint-detector"
+version = "0.1.0"
+description = "Muon Ionization Sensor Tracker: a webcam-based candidate particle event detector experiment."
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "opencv-python>=4.8",
+]
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+mint = "orbit_ray.cli:main"
+orbit-ray = "orbit_ray.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

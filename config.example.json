@@ -1,0 +1,39 @@
+{
+  "camera": {
+    "index": 0,
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "pixel_format": "YUY2",
+    "lock_auto_controls": true
+  },
+  "detection": {
+    "trigger_threshold": 200,
+    "hot_pixel_threshold": 180,
+    "hot_pixel_fraction": 0.05,
+    "calibration_frames": 300,
+    "max_cluster_size": 25,
+    "dynamic_mask_max_additions_per_minute": 500
+  },
+  "scoring": {
+    "enabled": true,
+    "mask_isolation_radius": 2,
+    "expected_max_events_per_minute": 5.0,
+    "noisy_events_per_minute": 20.0,
+    "high_confidence_threshold": 0.75,
+    "medium_confidence_threshold": 0.45
+  },
+  "output": {
+    "dir": "orbit_ray_output",
+    "event_log": "cosmic_events.jsonl",
+    "save_crops": true,
+    "crop_radius": 12,
+    "status_interval_seconds": 5
+  },
+  "simulation": {
+    "enabled": false,
+    "interval_seconds": 60,
+    "intensity": 255,
+    "max_cluster_pixels": 3
+  }
+}

@@ -1,0 +1,32 @@
+# Local environment
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# MINT runtime data
+orbit_ray_output/
+*.jsonl
+crops/
+snapshots/
+
+# Local planning and private notes
+orbit_ray_prd.md
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
