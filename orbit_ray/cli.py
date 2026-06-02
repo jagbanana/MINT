@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import time
 
 import numpy as np
 
-from .config import AppConfig, load_config
+from .coincidence import coincidence_record, match_coincidences
+from .config import AppConfig, CameraConfig, load_config
 from .detector import (
+    CalibrationSummary,
     CandidateEvent,
     apply_dynamic_mask,
     calibrate,
@@ -20,6 +22,24 @@ from .detector import (
 from .logging_io import append_jsonl, ensure_output_dirs, write_json
 from .scoring import score_event
 from .simulator import SimulationInjector
+
+
+@dataclass
+class SensorRuntime:
+    camera_config: CameraConfig
+    capture: object
+    camera_settings: dict
+    static_mask: np.ndarray
+    dynamic_mask: np.ndarray
+    calibration: CalibrationSummary
+    calibration_record: dict
+    pending: list[tuple[CandidateEvent, np.ndarray]] = field(default_factory=list)
+    dynamic_window_start: float = field(default_factory=time.monotonic)
+    dynamic_window_additions: int = 0
+
+    @property
+    def label(self) -> str:
+        return self.camera_config.label
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,26 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     paths = ensure_output_dirs(output_dir)
     event_log = paths["root"] / config.output.event_log
 
-    capture = open_capture(cv2, config)
-    camera_settings = read_camera_settings(cv2, capture, config)
-    print("Orbit-Ray started")
-    print(f"Camera settings: {camera_settings}")
+    sensor_configs = [config.camera]
+    if config.coincidence.enabled:
+        sensor_configs.append(config.secondary_camera)
 
-    calibration_frames = capture_calibration_frames(capture, cv2, config)
-    static_mask, calibration = calibrate(
-        calibration_frames,
-        config.detection.hot_pixel_threshold,
-        config.detection.hot_pixel_fraction,
-    )
-    dynamic_mask = np.zeros_like(static_mask, dtype=bool)
-    calibration_record = {
-        "timestamp": utc_timestamp_ms(),
-        "calibration": calibration,
-        "camera_settings": camera_settings,
-        "config": asdict(config),
-    }
-    write_json(paths["root"] / "calibration_summary.json", calibration_record)
-    print(f"Calibration complete: {asdict(calibration)}")
+    sensors = setup_sensors(cv2, config, paths["root"], sensor_configs)
+    print("MINT started")
+    print(f"Mode: {'two-sensor coincidence' if config.coincidence.enabled else 'single sensor'}")
 
     injector = SimulationInjector(
         interval_seconds=config.simulation.interval_seconds,
@@ -66,124 +73,101 @@ def main(argv: list[str] | None = None) -> int:
 
     counters = {
         "frames": 0,
-        "candidates": 0,
-        "verified": 0,
+        "sensor_candidates": 0,
+        "verified_sensor_events": 0,
+        "coincidence_events": 0,
+        "unmatched_sensor_events": 0,
         "persistent_dropped": 0,
         "dynamic_mask_additions": 0,
     }
     recent_events: list[dict] = []
-    pending: list[tuple[CandidateEvent, np.ndarray]] = []
     start = time.monotonic()
     last_status = start
-    dynamic_window_start = start
-    dynamic_window_additions = 0
 
     try:
         while True:
-            ok, frame = capture.read()
-            if not ok:
-                print("Camera read failed; attempting reconnect...")
-                capture.release()
-                time.sleep(2)
-                capture = open_capture(cv2, config)
-                continue
-
-            gray = to_gray(cv2, frame)
+            frames = read_sensor_frames(cv2, config, sensors)
             counters["frames"] += 1
             frame_index = counters["frames"]
 
-            for candidate, candidate_frame in pending:
-                if verify_candidate(candidate, gray, config.detection.trigger_threshold):
-                    crop_path = None
-                    if config.output.save_crops:
-                        crop = crop_around(candidate_frame, candidate.bbox, config.output.crop_radius)
-                        crop_path = save_crop(cv2, paths["crops"], crop, candidate)
-                    elapsed_minutes = max(0.001, (time.monotonic() - start) / 60)
-                    event_rate_per_minute = counters["verified"] / elapsed_minutes
-                    dynamic_additions_per_minute = dynamic_window_additions / max(
-                        0.001,
-                        (time.monotonic() - dynamic_window_start) / 60,
-                    )
-                    score_record = None
-                    if config.scoring.enabled:
-                        score_record = score_event(
-                            candidate=candidate,
-                            threshold=config.detection.trigger_threshold,
-                            max_cluster_size=config.detection.max_cluster_size,
-                            static_mask=static_mask,
-                            dynamic_mask=dynamic_mask,
-                            calibration=calibration,
-                            event_rate_per_minute=event_rate_per_minute,
-                            dynamic_mask_additions_per_minute=dynamic_additions_per_minute,
-                            mask_isolation_radius=config.scoring.mask_isolation_radius,
-                            expected_max_events_per_minute=config.scoring.expected_max_events_per_minute,
-                            noisy_events_per_minute=config.scoring.noisy_events_per_minute,
-                            high_confidence_threshold=config.scoring.high_confidence_threshold,
-                            medium_confidence_threshold=config.scoring.medium_confidence_threshold,
-                        ).to_record()
-                    record = candidate.to_record(
-                        static_mask_count=int(static_mask.sum()),
-                        dynamic_mask_count=int(dynamic_mask.sum()),
-                        camera_settings=camera_settings,
-                        crop_path=crop_path,
-                        score=score_record,
-                    )
-                    append_jsonl(event_log, record)
-                    counters["verified"] += 1
-                    recent_events = (recent_events + [record])[-5:]
-                else:
-                    additions = apply_dynamic_mask(dynamic_mask, candidate)
-                    dynamic_window_additions += additions
-                    counters["dynamic_mask_additions"] += additions
-                    counters["persistent_dropped"] += 1
-            pending = []
+            verified_by_sensor: dict[str, list[CandidateEvent]] = {}
+            records_by_event_id: dict[int, dict] = {}
 
-            simulated_coords: set[tuple[int, int]] = set()
-            if config.simulation.enabled:
-                simulated_coords = injector.maybe_inject(gray)
-
-            candidates = detect_clusters(
-                gray,
-                static_mask,
-                dynamic_mask,
-                config.detection.trigger_threshold,
-                frame_index,
-                config.detection.max_cluster_size,
-                simulated_coords,
-            )
-            counters["candidates"] += len(candidates)
-            pending = [(candidate, gray.copy()) for candidate in candidates]
-
-            now = time.monotonic()
-            if now - dynamic_window_start >= 60:
-                dynamic_window_start = now
-                dynamic_window_additions = 0
-            if dynamic_window_additions > config.detection.dynamic_mask_max_additions_per_minute:
-                print("Warning: dynamic mask is growing quickly. Check for light leaks or camera setting changes.")
-                dynamic_window_additions = 0
-
-            if now - last_status >= config.output.status_interval_seconds:
-                status = build_status(
+            for sensor in sensors:
+                verified = verify_pending_events(
+                    sensor,
+                    frames[sensor.label],
+                    paths["crops"],
+                    config,
                     counters,
                     start,
-                    static_mask,
-                    dynamic_mask,
-                    camera_settings,
-                    calibration_record,
-                    recent_events,
                 )
+                verified_by_sensor[sensor.label] = verified
+                for candidate in verified:
+                    records_by_event_id[id(candidate)] = build_sensor_event_record(
+                        sensor=sensor,
+                        candidate=candidate,
+                        candidate_frame=get_candidate_frame(sensor, candidate),
+                        crops_dir=paths["crops"],
+                        config=config,
+                        counters=counters,
+                        start=start,
+                    )
+                sensor.pending = []
+
+            if config.coincidence.enabled and len(sensors) == 2:
+                new_records = log_coincidence_results(
+                    sensors,
+                    verified_by_sensor,
+                    records_by_event_id,
+                    config,
+                    event_log,
+                    counters,
+                )
+            else:
+                new_records = []
+                for candidates in verified_by_sensor.values():
+                    for candidate in candidates:
+                        record = records_by_event_id[id(candidate)]
+                        append_jsonl(event_log, record)
+                        new_records.append(record)
+
+            if new_records:
+                recent_events = (recent_events + new_records)[-5:]
+
+            simulated_coords = maybe_inject_simulation(frames, sensors, injector, config)
+            for sensor in sensors:
+                candidates = detect_clusters(
+                    frames[sensor.label],
+                    sensor.static_mask,
+                    sensor.dynamic_mask,
+                    config.detection.trigger_threshold,
+                    frame_index,
+                    config.detection.max_cluster_size,
+                    simulated_coords.get(sensor.label),
+                    sensor.label,
+                )
+                counters["sensor_candidates"] += len(candidates)
+                sensor.pending = [(candidate, frames[sensor.label].copy()) for candidate in candidates]
+
+            update_dynamic_windows(sensors, config)
+
+            now = time.monotonic()
+            if now - last_status >= config.output.status_interval_seconds:
+                status = build_status(counters, start, sensors, config, recent_events)
                 print_status(status)
                 write_json(paths["snapshots"] / "latest_status.json", status)
                 last_status = now
     except KeyboardInterrupt:
-        print("\nOrbit-Ray stopped.")
+        print("\nMINT stopped.")
     finally:
-        capture.release()
+        for sensor in sensors:
+            sensor.capture.release()
     return 0
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Orbit-Ray candidate particle event detector.")
+    parser = argparse.ArgumentParser(description="MINT candidate particle event detector.")
     parser.add_argument("--config", help="Path to JSON or YAML config file.")
     parser.add_argument("--simulate", action="store_true", help="Inject simulated events into captured frames.")
     parser.add_argument("--threshold", type=int, help="Override trigger threshold.")
@@ -200,31 +184,248 @@ def apply_overrides(config: AppConfig, args: argparse.Namespace) -> None:
         config.output.dir = args.output_dir
 
 
-def open_capture(cv2, config: AppConfig):
-    capture = cv2.VideoCapture(config.camera.index, cv2.CAP_DSHOW)
-    if not capture.isOpened():
-        capture = cv2.VideoCapture(config.camera.index)
-    if not capture.isOpened():
-        raise RuntimeError(f"Unable to open camera index {config.camera.index}.")
+def setup_sensors(cv2, config: AppConfig, output_dir: Path, camera_configs: list[CameraConfig]) -> list[SensorRuntime]:
+    sensors: list[SensorRuntime] = []
+    for camera_config in camera_configs:
+        capture = open_capture(cv2, camera_config)
+        camera_settings = read_camera_settings(cv2, capture, camera_config)
+        print(f"Camera settings for {camera_config.label}: {camera_settings}")
+        calibration_frames = capture_calibration_frames(capture, cv2, config, camera_config.label)
+        static_mask, calibration = calibrate(
+            calibration_frames,
+            config.detection.hot_pixel_threshold,
+            config.detection.hot_pixel_fraction,
+        )
+        dynamic_mask = np.zeros_like(static_mask, dtype=bool)
+        calibration_record = {
+            "timestamp": utc_timestamp_ms(),
+            "sensor_label": camera_config.label,
+            "calibration": calibration,
+            "camera_settings": camera_settings,
+            "config": asdict(config),
+        }
+        write_json(output_dir / f"calibration_summary_{camera_config.label}.json", calibration_record)
+        print(f"Calibration complete for {camera_config.label}: {asdict(calibration)}")
+        sensors.append(
+            SensorRuntime(
+                camera_config=camera_config,
+                capture=capture,
+                camera_settings=camera_settings,
+                static_mask=static_mask,
+                dynamic_mask=dynamic_mask,
+                calibration=calibration,
+                calibration_record=calibration_record,
+            )
+        )
+    if len(sensors) == 1:
+        write_json(output_dir / "calibration_summary.json", sensors[0].calibration_record)
+    return sensors
 
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, config.camera.width)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, config.camera.height)
-    capture.set(cv2.CAP_PROP_FPS, config.camera.fps)
-    if config.camera.pixel_format:
-        fourcc = cv2.VideoWriter_fourcc(*config.camera.pixel_format[:4])
+
+def read_sensor_frames(cv2, config: AppConfig, sensors: list[SensorRuntime]) -> dict[str, np.ndarray]:
+    frames: dict[str, np.ndarray] = {}
+    for sensor in sensors:
+        ok, frame = sensor.capture.read()
+        if not ok:
+            print(f"Camera read failed for {sensor.label}; attempting reconnect...")
+            sensor.capture.release()
+            time.sleep(2)
+            sensor.capture = open_capture(cv2, sensor.camera_config)
+            sensor.camera_settings = read_camera_settings(cv2, sensor.capture, sensor.camera_config)
+            ok, frame = sensor.capture.read()
+            if not ok:
+                raise RuntimeError(f"Camera read failed after reconnect for {sensor.label}.")
+        frames[sensor.label] = to_gray(cv2, frame)
+    return frames
+
+
+def verify_pending_events(
+    sensor: SensorRuntime,
+    gray: np.ndarray,
+    crops_dir: Path,
+    config: AppConfig,
+    counters: dict,
+    start: float,
+) -> list[CandidateEvent]:
+    del crops_dir, start
+    verified: list[CandidateEvent] = []
+    for candidate, _candidate_frame in sensor.pending:
+        if verify_candidate(candidate, gray, config.detection.trigger_threshold):
+            counters["verified_sensor_events"] += 1
+            verified.append(candidate)
+        else:
+            additions = apply_dynamic_mask(sensor.dynamic_mask, candidate)
+            sensor.dynamic_window_additions += additions
+            counters["dynamic_mask_additions"] += additions
+            counters["persistent_dropped"] += 1
+    return verified
+
+
+def get_candidate_frame(sensor: SensorRuntime, candidate: CandidateEvent) -> np.ndarray:
+    for pending_candidate, frame in sensor.pending:
+        if pending_candidate is candidate:
+            return frame
+    raise RuntimeError(f"Missing candidate frame for {candidate.sensor_label} frame {candidate.frame_index}.")
+
+
+def build_sensor_event_record(
+    sensor: SensorRuntime,
+    candidate: CandidateEvent,
+    candidate_frame: np.ndarray,
+    crops_dir: Path,
+    config: AppConfig,
+    counters: dict,
+    start: float,
+    event_type: str = "single_sensor_candidate",
+) -> dict:
+    crop_path = None
+    if config.output.save_crops:
+        crop = crop_around(candidate_frame, candidate.bbox, config.output.crop_radius)
+        crop_path = save_crop(None, crops_dir, crop, candidate)
+
+    elapsed_minutes = max(0.001, (time.monotonic() - start) / 60)
+    event_rate_per_minute = counters["verified_sensor_events"] / elapsed_minutes
+    dynamic_additions_per_minute = sensor.dynamic_window_additions / max(
+        0.001,
+        (time.monotonic() - sensor.dynamic_window_start) / 60,
+    )
+    score_record = None
+    if config.scoring.enabled:
+        score_record = score_event(
+            candidate=candidate,
+            threshold=config.detection.trigger_threshold,
+            max_cluster_size=config.detection.max_cluster_size,
+            static_mask=sensor.static_mask,
+            dynamic_mask=sensor.dynamic_mask,
+            calibration=sensor.calibration,
+            event_rate_per_minute=event_rate_per_minute,
+            dynamic_mask_additions_per_minute=dynamic_additions_per_minute,
+            mask_isolation_radius=config.scoring.mask_isolation_radius,
+            expected_max_events_per_minute=config.scoring.expected_max_events_per_minute,
+            noisy_events_per_minute=config.scoring.noisy_events_per_minute,
+            high_confidence_threshold=config.scoring.high_confidence_threshold,
+            medium_confidence_threshold=config.scoring.medium_confidence_threshold,
+        ).to_record()
+    return candidate.to_record(
+        static_mask_count=int(sensor.static_mask.sum()),
+        dynamic_mask_count=int(sensor.dynamic_mask.sum()),
+        camera_settings=sensor.camera_settings,
+        crop_path=crop_path,
+        score=score_record,
+        event_type=event_type,
+    )
+
+
+def log_coincidence_results(
+    sensors: list[SensorRuntime],
+    verified_by_sensor: dict[str, list[CandidateEvent]],
+    records_by_event_id: dict[int, dict],
+    config: AppConfig,
+    event_log: Path,
+    counters: dict,
+) -> list[dict]:
+    primary = sensors[0]
+    secondary = sensors[1]
+    matches, unmatched_primary, unmatched_secondary = match_coincidences(
+        verified_by_sensor.get(primary.label, []),
+        verified_by_sensor.get(secondary.label, []),
+        config.coincidence.max_frame_delta,
+        config.coincidence.max_centroid_distance_pixels,
+    )
+    written: list[dict] = []
+    camera_settings = {
+        primary.label: primary.camera_settings,
+        secondary.label: secondary.camera_settings,
+    }
+    for match in matches:
+        record = coincidence_record(
+            match,
+            records_by_event_id[id(match.primary)],
+            records_by_event_id[id(match.secondary)],
+            camera_settings,
+        )
+        append_jsonl(event_log, record)
+        counters["coincidence_events"] += 1
+        written.append(record)
+
+    if config.coincidence.log_unmatched_sensor_events:
+        for candidate in unmatched_primary + unmatched_secondary:
+            record = records_by_event_id[id(candidate)]
+            record["event_type"] = "unmatched_sensor_candidate"
+            append_jsonl(event_log, record)
+            counters["unmatched_sensor_events"] += 1
+            written.append(record)
+    return written
+
+
+def maybe_inject_simulation(
+    frames: dict[str, np.ndarray],
+    sensors: list[SensorRuntime],
+    injector: SimulationInjector,
+    config: AppConfig,
+) -> dict[str, set[tuple[int, int]]]:
+    simulated: dict[str, set[tuple[int, int]]] = {sensor.label: set() for sensor in sensors}
+    if not config.simulation.enabled:
+        return simulated
+
+    first = sensors[0]
+    coords = injector.maybe_inject(frames[first.label])
+    if not coords:
+        return simulated
+    simulated[first.label] = coords
+    if config.coincidence.enabled:
+        for sensor in sensors[1:]:
+            apply_simulated_coords(frames[sensor.label], coords, config.simulation.intensity)
+            simulated[sensor.label] = set(coords)
+    return simulated
+
+
+def apply_simulated_coords(gray: np.ndarray, coords: set[tuple[int, int]], intensity: int) -> None:
+    h, w = gray.shape[:2]
+    for y, x in coords:
+        if 0 <= y < h and 0 <= x < w:
+            gray[y, x] = intensity
+
+
+def update_dynamic_windows(sensors: list[SensorRuntime], config: AppConfig) -> None:
+    now = time.monotonic()
+    for sensor in sensors:
+        if now - sensor.dynamic_window_start >= 60:
+            sensor.dynamic_window_start = now
+            sensor.dynamic_window_additions = 0
+        if sensor.dynamic_window_additions > config.detection.dynamic_mask_max_additions_per_minute:
+            print(
+                f"Warning: dynamic mask for {sensor.label} is growing quickly. "
+                "Check for light leaks, heat drift, or camera setting changes."
+            )
+            sensor.dynamic_window_additions = 0
+
+
+def open_capture(cv2, camera_config: CameraConfig):
+    capture = cv2.VideoCapture(camera_config.index, cv2.CAP_DSHOW)
+    if not capture.isOpened():
+        capture = cv2.VideoCapture(camera_config.index)
+    if not capture.isOpened():
+        raise RuntimeError(f"Unable to open camera index {camera_config.index}.")
+
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, camera_config.width)
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_config.height)
+    capture.set(cv2.CAP_PROP_FPS, camera_config.fps)
+    if camera_config.pixel_format:
+        fourcc = cv2.VideoWriter_fourcc(*camera_config.pixel_format[:4])
         capture.set(cv2.CAP_PROP_FOURCC, fourcc)
-    if config.camera.lock_auto_controls:
+    if camera_config.lock_auto_controls:
         capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
         capture.set(cv2.CAP_PROP_AUTO_WB, 0)
         capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
     return capture
 
 
-def read_camera_settings(cv2, capture, config: AppConfig) -> dict:
+def read_camera_settings(cv2, capture, camera_config: CameraConfig) -> dict:
     fourcc_value = int(capture.get(cv2.CAP_PROP_FOURCC))
     fourcc = "".join(chr((fourcc_value >> 8 * i) & 0xFF) for i in range(4)).strip()
     return {
-        "requested": asdict(config.camera),
+        "requested": asdict(camera_config),
         "actual_width": capture.get(cv2.CAP_PROP_FRAME_WIDTH),
         "actual_height": capture.get(cv2.CAP_PROP_FRAME_HEIGHT),
         "actual_fps": capture.get(cv2.CAP_PROP_FPS),
@@ -234,17 +435,22 @@ def read_camera_settings(cv2, capture, config: AppConfig) -> dict:
     }
 
 
-def capture_calibration_frames(capture, cv2, config: AppConfig) -> list[np.ndarray]:
+def capture_calibration_frames(
+    capture,
+    cv2,
+    config: AppConfig,
+    sensor_label: str,
+) -> list[np.ndarray]:
     frames: list[np.ndarray] = []
     target = config.detection.calibration_frames
-    print(f"[{local_timestamp_ms()}] Calibrating with {target} dark frames...")
+    print(f"[{local_timestamp_ms()}] Calibrating {sensor_label} with {target} dark frames...")
     while len(frames) < target:
         ok, frame = capture.read()
         if not ok:
-            raise RuntimeError("Camera read failed during calibration.")
+            raise RuntimeError(f"Camera read failed during calibration for {sensor_label}.")
         frames.append(to_gray(cv2, frame))
         if len(frames) % 50 == 0:
-            print(f"[{local_timestamp_ms()}] Calibration frames: {len(frames)}/{target}")
+            print(f"[{local_timestamp_ms()}] {sensor_label} calibration frames: {len(frames)}/{target}")
     return frames
 
 
@@ -254,10 +460,12 @@ def to_gray(cv2, frame) -> np.ndarray:
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
-def save_crop(cv2, crops_dir: Path, crop: np.ndarray, candidate: CandidateEvent) -> str:
+def save_crop(_cv2, crops_dir: Path, crop: np.ndarray, candidate: CandidateEvent) -> str:
+    import cv2  # type: ignore
+
     stamp = candidate.timestamp.replace(":", "").replace(".", "")
     sim = "sim" if candidate.simulated else "real"
-    path = crops_dir / f"{stamp}_frame{candidate.frame_index}_{sim}.png"
+    path = crops_dir / f"{stamp}_{candidate.sensor_label}_frame{candidate.frame_index}_{sim}.png"
     cv2.imwrite(str(path), crop)
     return str(path)
 
@@ -265,44 +473,59 @@ def save_crop(cv2, crops_dir: Path, crop: np.ndarray, candidate: CandidateEvent)
 def build_status(
     counters: dict,
     start: float,
-    static_mask: np.ndarray,
-    dynamic_mask: np.ndarray,
-    camera_settings: dict,
-    calibration_record: dict,
+    sensors: list[SensorRuntime],
+    config: AppConfig,
     recent_events: list[dict],
 ) -> dict:
     elapsed = max(0.001, time.monotonic() - start)
     return {
         "timestamp": utc_timestamp_ms(),
+        "mode": "two-sensor coincidence" if config.coincidence.enabled else "single sensor",
         "runtime_seconds": elapsed,
         "fps_average": counters["frames"] / elapsed,
         "counters": counters,
-        "static_mask_count": int(static_mask.sum()),
-        "dynamic_mask_count": int(dynamic_mask.sum()),
-        "camera_settings": camera_settings,
-        "calibration": calibration_record["calibration"],
+        "sensors": {
+            sensor.label: {
+                "static_mask_count": int(sensor.static_mask.sum()),
+                "dynamic_mask_count": int(sensor.dynamic_mask.sum()),
+                "camera_settings": sensor.camera_settings,
+                "calibration": sensor.calibration,
+            }
+            for sensor in sensors
+        },
         "recent_events": recent_events,
     }
 
 
 def print_status(status: dict) -> None:
     counters = status["counters"]
-    latest_score = ""
+    latest = ""
     if status["recent_events"]:
-        score = status["recent_events"][-1].get("score") or {}
-        latest_score = (
-            f" latest={score.get('confidence_class', 'n/a')}"
-            f"/{score.get('candidate_quality_score', 'n/a')}"
-        )
+        event = status["recent_events"][-1]
+        if event.get("event_type") == "coincidence_candidate":
+            latest = " latest=coincidence"
+        else:
+            score = event.get("score") or {}
+            latest = (
+                f" latest={score.get('confidence_class', 'n/a')}"
+                f"/{score.get('candidate_quality_score', 'n/a')}"
+            )
+    mask_summary = ",".join(
+        f"{label}:{data['static_mask_count']}+{data['dynamic_mask_count']}"
+        for label, data in status["sensors"].items()
+    )
     print(
         f"[{local_timestamp_ms()}] Status: "
+        f"mode={status['mode']} "
         f"frames={counters['frames']} "
         f"fps={status['fps_average']:.2f} "
-        f"candidates={counters['candidates']} "
-        f"verified={counters['verified']} "
+        f"candidates={counters['sensor_candidates']} "
+        f"sensor_verified={counters['verified_sensor_events']} "
+        f"coincidence={counters['coincidence_events']} "
+        f"unmatched={counters['unmatched_sensor_events']} "
         f"persistent={counters['persistent_dropped']} "
-        f"masks={status['static_mask_count']}+{status['dynamic_mask_count']}"
-        f"{latest_score}"
+        f"masks={mask_summary}"
+        f"{latest}"
     )
 
 

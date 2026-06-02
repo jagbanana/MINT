@@ -9,6 +9,7 @@ from typing import Any
 @dataclass
 class CameraConfig:
     index: int = 0
+    label: str = "sensor_0"
     width: int = 1280
     height: int = 720
     fps: int = 30
@@ -37,6 +38,14 @@ class ScoringConfig:
 
 
 @dataclass
+class CoincidenceConfig:
+    enabled: bool = False
+    max_frame_delta: int = 1
+    max_centroid_distance_pixels: float = 12.0
+    log_unmatched_sensor_events: bool = True
+
+
+@dataclass
 class OutputConfig:
     dir: str = "orbit_ray_output"
     event_log: str = "cosmic_events.jsonl"
@@ -56,7 +65,9 @@ class SimulationConfig:
 @dataclass
 class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
+    secondary_camera: CameraConfig = field(default_factory=lambda: CameraConfig(index=1, label="sensor_1"))
     detection: DetectionConfig = field(default_factory=DetectionConfig)
+    coincidence: CoincidenceConfig = field(default_factory=CoincidenceConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)

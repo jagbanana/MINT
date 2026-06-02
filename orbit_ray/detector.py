@@ -25,6 +25,7 @@ class CandidateEvent:
     centroid_x: float
     centroid_y: float
     bbox: tuple[int, int, int, int]
+    sensor_label: str = "sensor_0"
     simulated: bool = False
     timestamp: str = ""
 
@@ -35,10 +36,13 @@ class CandidateEvent:
         camera_settings: dict,
         crop_path: str | None = None,
         score: dict | None = None,
+        event_type: str = "single_sensor_candidate",
     ) -> dict:
         timestamp = self.timestamp or utc_timestamp_ms()
         return {
+            "event_type": event_type,
             "timestamp": timestamp,
+            "sensor_label": self.sensor_label,
             "frame_index": self.frame_index,
             "peak_intensity": self.peak_intensity,
             "cluster_size": self.cluster_size,
@@ -92,6 +96,7 @@ def detect_clusters(
     frame_index: int,
     max_cluster_size: int,
     simulated_coords: set[tuple[int, int]] | None = None,
+    sensor_label: str = "sensor_0",
 ) -> list[CandidateEvent]:
     eligible = (gray > threshold) & ~static_mask & ~dynamic_mask
     ys, xs = np.nonzero(eligible)
@@ -108,7 +113,7 @@ def detect_clusters(
         coords = _walk_cluster(start, active, visited)
         if len(coords) > max_cluster_size:
             continue
-        candidates.append(_candidate_from_coords(gray, coords, frame_index, simulated_coords))
+        candidates.append(_candidate_from_coords(gray, coords, frame_index, sensor_label, simulated_coords))
     return candidates
 
 
@@ -164,6 +169,7 @@ def _candidate_from_coords(
     gray: np.ndarray,
     coords: list[tuple[int, int]],
     frame_index: int,
+    sensor_label: str,
     simulated_coords: set[tuple[int, int]] | None,
 ) -> CandidateEvent:
     coord_array = np.array(coords, dtype=np.int64)
@@ -183,6 +189,7 @@ def _candidate_from_coords(
         centroid_x=centroid_x,
         centroid_y=centroid_y,
         bbox=(int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())),
+        sensor_label=sensor_label,
         simulated=simulated,
         timestamp=utc_timestamp_ms(),
     )

@@ -7,6 +7,8 @@ from orbit_ray.detector import (
     detect_clusters,
     verify_candidate,
 )
+from orbit_ray.coincidence import coincidence_record, match_coincidences
+from orbit_ray.config import load_config
 from orbit_ray.scoring import score_event
 from orbit_ray.simulator import SimulationInjector
 
@@ -103,3 +105,37 @@ def test_scoring_adds_quality_risk_and_confidence_class():
     assert score.artifact_risk_score <= 0.25
     assert score.confidence_class == "high"
     assert record["score"]["factors"]["signal_strength"] == 1.0
+
+
+def test_config_defaults_to_single_sensor_with_secondary_available():
+    config = load_config(None)
+
+    assert not config.coincidence.enabled
+    assert config.camera.index == 0
+    assert config.secondary_camera.index == 1
+
+
+def test_coincidence_matching_pairs_nearby_dual_sensor_events():
+    static = np.zeros((8, 8), dtype=bool)
+    dynamic = np.zeros_like(static)
+    top = np.zeros((8, 8), dtype=np.uint8)
+    bottom = np.zeros((8, 8), dtype=np.uint8)
+    top[4, 4] = 255
+    bottom[4, 5] = 255
+
+    top_event = detect_clusters(top, static, dynamic, 200, 12, 10, sensor_label="top")[0]
+    bottom_event = detect_clusters(bottom, static, dynamic, 200, 12, 10, sensor_label="bottom")[0]
+
+    matches, unmatched_top, unmatched_bottom = match_coincidences(
+        [top_event],
+        [bottom_event],
+        max_frame_delta=1,
+        max_centroid_distance_pixels=2.0,
+    )
+
+    assert len(matches) == 1
+    assert not unmatched_top
+    assert not unmatched_bottom
+    record = coincidence_record(matches[0], top_event.to_record(0, 0, {}), bottom_event.to_record(0, 0, {}), {})
+    assert record["event_type"] == "coincidence_candidate"
+    assert record["confidence_class"] == "coincidence"
