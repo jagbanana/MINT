@@ -1,16 +1,20 @@
 # MINT
 
-**Muon Ionization Sensor Tracker**
+**MINT (Muon Ionization Sensor Tracker) Home-Lab Particle Detector Software & Build**
 
-MINT is a homebrew cosmic-ray telescope experiment built from ordinary camera sensors. It starts as a dark-frame detector for a single webcam, then grows into a two-sensor coincidence detector that can separate one-camera noise from events that pass through two independent layers of silicon.
+MINT is experimental particle-detector software built for inexpensive camera sensors. It starts as a dark-frame detector for a single webcam, but also allows for a more sophisticated two-sensor coincidence detector that can separate one-camera noise from events that pass through two independent layers of silicon.
 
-## Why Cosmic Rays Are Wonderful
+For about $70, you can build your own 2-sensor detector. 
+
+More precisely, MINT is a **candidate particle event detector**. A single dark camera can detect transient sensor events, but cannot prove what caused them. A two-sensor coincidence build is much closer to a real particle detector because a penetrating particle can trigger both sensors while local camera noise should remain isolated to one sensor.
+
+## Cosmic Rays are Still a Mystery
 
 Cosmic rays are high-energy particles that arrive at Earth from space. By the time they reach sea level, many of the particles we can realistically detect are **secondary cosmic rays**, especially muons: short-lived, highly penetrating particles created when primary cosmic rays slam into atoms high in the atmosphere.
 
-The eerie part is that the universe is still not done explaining itself. Scientists know some cosmic rays come from violent astrophysical places and processes, including supernova remnants, active galaxies, and other extreme environments. But the highest-energy cosmic rays remain partly mysterious. Something out there is accelerating particles to absurd energies, far beyond what human-built accelerators can reach, and we are still piecing together exactly where and how.
+Scientists know some cosmic rays come from supernova remnants, active galaxies, and other extreme environments. But the highest-energy cosmic rays remain mysterious. Something out there is accelerating particles to extremely high energies, far beyond what human-built accelerators can reach, and we are still piecing together exactly where and how.
 
-MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or spare laptop. It will not replace a scientific detector array, but it lets you build a little listening post for rare, invisible events passing through ordinary matter all the time.
+MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or spare laptop. It will not replace a scientific detector array, but it lets you build a listening post and can help contribute to our collective understanding of these high-energy events.
 
 ## What It Does
 
@@ -47,6 +51,8 @@ Two-sensor mode opens two cameras, calibrates them independently, runs the same 
 
 This technique is a small version of a **coincidence telescope**. Random thermal noise on one sensor should not happen at nearly the same time and place on a second independent sensor. A penetrating muon, however, can pass through both sensor layers.
 
+The current implementation assumes the two sensors are reasonably aligned by the physical build: identical camera boards stacked vertically using the boards' pre-drilled mounting holes and rigid standoffs. A future alignment workflow could map offsets between sensors and compensate for rotation, translation, or scale differences.
+
 Enable it in config:
 
 ```json
@@ -77,7 +83,7 @@ python -m orbit_ray.cli --config config.example.json
 In two-sensor mode, JSONL records may include:
 
 * `coincidence_candidate`: paired transient detected on both sensors.
-* `unmatched_sensor_candidate`: transient detected on only one sensor.
+* `unmatched_sensor_candidate`: transient detected on only one sensor. These are still useful for troubleshooting sensor noise, threshold settings, heat drift, and light leaks.
 
 ## How It Works
 
@@ -124,7 +130,7 @@ During calibration, MINT captures a stack of dark frames and marks pixels that a
 
 ## Hardware Recommendation
 
-For a first dedicated two-sensor build, the **InnoMaker U20CAM-9281M / OV9281 Global Shutter Mono USB Camera Module** is a strong starting point. InnoMaker lists it as a 1MP monochrome global-shutter OV9281 UVC module with Windows, Linux, and macOS plug-and-play support, YUY2/MJPG output, and 1280x800/1280x720 modes. It is also small enough to stack mechanically.
+For a first dedicated two-sensor build, use two identical USB camera modules. The **InnoMaker U20CAM-9281M / OV9281 Global Shutter Mono USB Camera Module** is a strong starting point. InnoMaker lists it as a 1MP monochrome global-shutter OV9281 UVC module with Windows, Linux, and macOS plug-and-play support, YUY2/MJPG output, and 1280x800/1280x720 modes. It is also small enough to stack mechanically.
 
 At the time of writing, the manufacturer page listed the U20CAM-9281M at about **$33 per module**, and Amazon pricing commonly floats around the low-to-mid `$30s`. Plan on buying two matched modules.
 
@@ -161,10 +167,12 @@ Build notes:
 
 * Use non-conductive M3 nylon screws, nuts, and 10-15 mm standoffs.
 * Align the sensors on the X/Y axes as closely as possible.
+* For the first software pass, assume the boards are aligned well enough by the shared mounting-hole geometry.
 * Keep the boards parallel and rigid so vibration does not ruin alignment.
 * Route USB cables so they do not pull on the frame.
 * Prefer a small lightproof project box over wrapping whole boards in tape.
 * Block light at the lens/sensor path, but leave room for heat to escape.
+* Lens removal may improve the physical stack, but validate the camera module mechanically before committing to that path.
 
 Spacing matters. A very wide separation creates a narrower acceptance angle and may reduce the hit rate dramatically. A tight 10-15 mm separation is a better first build because it gives the code a fighting chance to see coincidences while you are still experimenting.
 
@@ -246,6 +254,8 @@ By default, MINT writes runtime output to `orbit_ray_output/`:
 
 Runtime output is ignored by Git.
 
+Single-sensor events remain useful in two-sensor mode. They are not strong particle evidence on their own, but they help characterize each sensor and can be scrubbed or filtered later during analysis.
+
 ## Configuration
 
 Start with [config.example.json](config.example.json). Common settings include:
@@ -255,6 +265,7 @@ Start with [config.example.json](config.example.json). Common settings include:
 * `coincidence.enabled`
 * `coincidence.max_frame_delta`
 * `coincidence.max_centroid_distance_pixels`
+* `coincidence.log_unmatched_sensor_events`
 * `detection.trigger_threshold`
 * `detection.calibration_frames`
 * `output.status_interval_seconds`
