@@ -63,6 +63,7 @@ def coincidence_record(
     primary_record: dict,
     secondary_record: dict,
     camera_settings: dict,
+    track: dict | None = None,
 ) -> dict:
     return {
         "event_type": "coincidence_candidate",
@@ -75,6 +76,7 @@ def coincidence_record(
         "candidate_quality_score": 1.0,
         "artifact_risk_score": 0.0,
         "camera_settings": camera_settings,
+        "track": track,
         "sensors": {
             match.primary.sensor_label: primary_record,
             match.secondary.sensor_label: secondary_record,

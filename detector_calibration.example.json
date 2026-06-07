@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "notes": [
+    "Orient the detector so yaw_degrees_from_true_north describes the top sensor +Y pixel axis.",
+    "Use identical stacked sensors for the first pass; alignment can be refined later.",
+    "Pixel coordinates are converted to local sky direction for coincidence candidates only.",
+    "Pitch and roll are recorded for the model, but the first reconstruction pass applies yaw only."
+  ],
+  "site": {
+    "latitude_deg": null,
+    "longitude_deg": null,
+    "elevation_m": null,
+    "location_name": ""
+  },
+  "pose": {
+    "yaw_degrees_from_true_north": 0.0,
+    "pitch_degrees": 0.0,
+    "roll_degrees": 0.0,
+    "top_sensor_label": "top",
+    "bottom_sensor_label": "bottom"
+  },
+  "geometry": {
+    "active_width_px": 1280,
+    "active_height_px": 800,
+    "pixel_pitch_um": 3.0,
+    "sensor_separation_mm": 12.0
+  },
+  "bottom_to_top_alignment": {
+    "x_offset_px": 0.0,
+    "y_offset_px": 0.0,
+    "rotation_degrees": 0.0,
+    "scale_x": 1.0,
+    "scale_y": 1.0
+  }
+}

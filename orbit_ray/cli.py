@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 
+from .calibration import load_detector_calibration, reconstruct_track, write_calibration_template
 from .coincidence import coincidence_record, match_coincidences
 from .config import AppConfig, CameraConfig, load_config
 from .detector import (
@@ -44,6 +45,11 @@ class SensorRuntime:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.write_calibration_template:
+        write_calibration_template(args.write_calibration_template)
+        print(f"Wrote calibration template: {args.write_calibration_template}")
+        return 0
+
     config = load_config(args.config)
     apply_overrides(config, args)
 
@@ -60,6 +66,10 @@ def main(argv: list[str] | None = None) -> int:
     sensor_configs = [config.camera]
     if config.coincidence.enabled:
         sensor_configs.append(config.secondary_camera)
+
+    detector_calibration = None
+    if config.track_reconstruction.enabled:
+        detector_calibration = load_detector_calibration(config.track_reconstruction.calibration_file)
 
     sensors = setup_sensors(cv2, config, paths["root"], sensor_configs)
     print("MINT started")
@@ -123,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
                     config,
                     event_log,
                     counters,
+                    detector_calibration,
                 )
             else:
                 new_records = []
@@ -172,6 +183,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--simulate", action="store_true", help="Inject simulated events into captured frames.")
     parser.add_argument("--threshold", type=int, help="Override trigger threshold.")
     parser.add_argument("--output-dir", help="Override output directory.")
+    parser.add_argument(
+        "--write-calibration-template",
+        help="Write a detector_calibration.json template and exit.",
+    )
     return parser.parse_args(argv)
 
 
@@ -323,6 +338,7 @@ def log_coincidence_results(
     config: AppConfig,
     event_log: Path,
     counters: dict,
+    detector_calibration,
 ) -> list[dict]:
     primary = sensors[0]
     secondary = sensors[1]
@@ -338,11 +354,13 @@ def log_coincidence_results(
         secondary.label: secondary.camera_settings,
     }
     for match in matches:
+        track = reconstruct_track(match, detector_calibration) if detector_calibration else None
         record = coincidence_record(
             match,
             records_by_event_id[id(match.primary)],
             records_by_event_id[id(match.secondary)],
             camera_settings,
+            track,
         )
         append_jsonl(event_log, record)
         counters["coincidence_events"] += 1

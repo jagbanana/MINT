@@ -31,6 +31,10 @@
     "max_centroid_distance_pixels": 12.0,
     "log_unmatched_sensor_events": true
   },
+  "track_reconstruction": {
+    "enabled": false,
+    "calibration_file": "detector_calibration.json"
+  },
   "scoring": {
     "enabled": true,
     "mask_isolation_radius": 2,

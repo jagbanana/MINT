@@ -16,6 +16,53 @@ Scientists know some cosmic rays come from supernova remnants, active galaxies, 
 
 MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or spare laptop. It will not replace a scientific detector array, but it lets you build a listening post and can help contribute to our collective understanding of these high-energy events.
 
+## What MINT Is Actually Detecting
+
+A cosmic ray is usually a high-energy particle arriving from space, often a proton or atomic nucleus. MINT is probably not detecting that original primary cosmic ray directly. Instead, it is looking for evidence of **secondary muons** created after the primary cosmic ray hits Earth's upper atmosphere.
+
+```text
+Primary cosmic ray from space
+        |
+        v
+Hits upper atmosphere
+        |
+        v
+Particle shower
+        |
+        v
+Muons, electrons, photons, neutrinos, etc.
+        |
+        v
+Some muons reach your detector
+        |
+        v
+Muon passes through two camera sensors
+```
+
+Muons are useful because they are heavy cousins of electrons: they have the same negative electric charge, but about 207 times more mass. They are unstable, with a mean lifetime of about 2.2 microseconds at rest, but many are moving close enough to the speed of light that special relativity lets them survive the trip from the upper atmosphere to the ground.
+
+For a small detector, muons have a few practical advantages:
+
+* **Penetrating:** they can pass through roofs, walls, bodies, and basement ceilings.
+* **Common enough:** a rough sea-level order of magnitude is about one muon per square centimeter per minute, depending on angle, altitude, shielding, and detector threshold.
+* **Directional:** more arrive from near overhead than from near the horizon.
+* **Useful probes:** muons are used in real muon tomography work, including imaging volcanoes, pyramids, reactors, and dense structures.
+
+With a calibrated two-sensor MINT build, you can estimate the **local incoming direction** of a muon-like candidate: for example, azimuth 240 degrees, elevation 65 degrees. That is not the same as identifying the astrophysical source of the original cosmic ray. Primary cosmic rays are often charged, magnetic fields bend their paths, the atmosphere creates secondary particles, and a two-camera basement detector samples only a tiny slice of the resulting shower.
+
+To infer cosmic origin direction, you would need something closer to a larger detector area, multiple separated detector stations, precise timing, full air-shower reconstruction, atmospheric and geomagnetic modeling, and lots of events over long periods. That is the territory of observatory-scale projects.
+
+There is still useful science-adjacent work in local muon direction and timing:
+
+* Zenith-angle distribution: muons should be more common from near overhead than near the horizon.
+* Rate over time: event rate can vary with atmospheric pressure, altitude, shielding, and detector stability.
+* Barometric effect: higher air pressure usually means slightly fewer ground-level muons because the atmosphere is effectively thicker.
+* Building and shielding effects: basement walls, soil, concrete, or nearby structures may suppress some directions.
+* Coincidence purity: two-sensor coincidence rates can be compared against single-sensor transient rates.
+* Detector stability: dark current, hot pixels, thermal drift, false positives, and threshold behavior can be measured over time.
+
+The big unlock is publishing calibrated open data: timestamp, location, detector orientation, geometry, environmental metadata, calibration summaries, event crops, and direction histograms. MINT is not a source-discovery instrument, but it can become a reproducible local muon monitor.
+
 ## What It Does
 
 MINT:
@@ -32,6 +79,7 @@ MINT:
 * Supports simulation mode so the whole pipeline can be tested without waiting for rare events.
 * Scores each single-sensor event with a heuristic quality score, artifact risk score, and confidence class.
 * In two-sensor mode, promotes paired hits to `coincidence_candidate` events.
+* Optionally reconstructs local arrival direction when a detector calibration file is available.
 
 ## Detector Modes
 
@@ -188,6 +236,75 @@ Practical mitigations:
 * Watch dynamic mask growth and calibration stats.
 * Future work should add rolling dark-baseline adjustment for 24/7 deployments.
 
+## Detector Calibration And Track Reconstruction
+
+Track reconstruction requires more than two matching bright pixels. MINT needs a calibration model that describes the detector's location, orientation, physical geometry, and sensor-to-sensor alignment.
+
+Create a calibration template:
+
+```powershell
+python -m orbit_ray.cli --write-calibration-template detector_calibration.json
+```
+
+Then edit the generated JSON:
+
+```json
+{
+  "site": {
+    "latitude_deg": 21.3069,
+    "longitude_deg": -157.8583,
+    "elevation_m": 10,
+    "location_name": "example"
+  },
+  "pose": {
+    "yaw_degrees_from_true_north": 0.0,
+    "pitch_degrees": 0.0,
+    "roll_degrees": 0.0,
+    "top_sensor_label": "top",
+    "bottom_sensor_label": "bottom"
+  },
+  "geometry": {
+    "active_width_px": 1280,
+    "active_height_px": 800,
+    "pixel_pitch_um": 3.0,
+    "sensor_separation_mm": 12.0
+  },
+  "bottom_to_top_alignment": {
+    "x_offset_px": 0.0,
+    "y_offset_px": 0.0,
+    "rotation_degrees": 0.0,
+    "scale_x": 1.0,
+    "scale_y": 1.0
+  }
+}
+```
+
+Enable track reconstruction in config:
+
+```json
+{
+  "track_reconstruction": {
+    "enabled": true,
+    "calibration_file": "detector_calibration.json"
+  }
+}
+```
+
+The first calibration workflow is intentionally manual:
+
+1. Physically label the sensors as `top` and `bottom`.
+2. Mount the detector so the sensor stack is vertical and rigid.
+3. Point the top sensor's positive Y pixel axis toward true north as closely as practical.
+4. Enter site latitude, longitude, and elevation.
+5. Enter detector yaw, pitch, and roll. For the first pass, yaw is the key value.
+6. Enter sensor pixel dimensions, pixel pitch, and measured sensor separation.
+7. Start with zero offset/rotation between sensors if the boards are stacked using shared mounting holes.
+8. Refine `bottom_to_top_alignment` later using a controlled dim-light or pinhole calibration routine.
+
+Avoid a focused laser on a bare sensor. A dim diffused LED, masked aperture, or controlled corner illumination target is safer for a future alignment workflow. Once calibrated, coincidence records include a `track` object with local east/north/up unit vector, azimuth from true north, and elevation.
+
+The current reconstruction code applies yaw and sensor geometry. Pitch and roll are part of the calibration model, but full tilt compensation is reserved for the next calibration pass. Your filled-in `detector_calibration.json` is ignored by Git because it may contain private location data; use [detector_calibration.example.json](detector_calibration.example.json) as the public template.
+
 ## Event Scoring
 
 Each single-sensor event includes a heuristic score:
@@ -266,6 +383,8 @@ Start with [config.example.json](config.example.json). Common settings include:
 * `coincidence.max_frame_delta`
 * `coincidence.max_centroid_distance_pixels`
 * `coincidence.log_unmatched_sensor_events`
+* `track_reconstruction.enabled`
+* `track_reconstruction.calibration_file`
 * `detection.trigger_threshold`
 * `detection.calibration_frames`
 * `output.status_interval_seconds`

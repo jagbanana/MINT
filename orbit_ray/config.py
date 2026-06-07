@@ -46,6 +46,12 @@ class CoincidenceConfig:
 
 
 @dataclass
+class TrackReconstructionConfig:
+    enabled: bool = False
+    calibration_file: str = "detector_calibration.json"
+
+
+@dataclass
 class OutputConfig:
     dir: str = "orbit_ray_output"
     event_log: str = "cosmic_events.jsonl"
@@ -68,6 +74,7 @@ class AppConfig:
     secondary_camera: CameraConfig = field(default_factory=lambda: CameraConfig(index=1, label="sensor_1"))
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     coincidence: CoincidenceConfig = field(default_factory=CoincidenceConfig)
+    track_reconstruction: TrackReconstructionConfig = field(default_factory=TrackReconstructionConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)

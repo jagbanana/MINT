@@ -1,5 +1,11 @@
 import numpy as np
 
+from orbit_ray.calibration import (
+    DetectorCalibration,
+    load_detector_calibration,
+    reconstruct_track,
+    write_calibration_template,
+)
 from orbit_ray.detector import (
     apply_dynamic_mask,
     calibrate,
@@ -139,3 +145,35 @@ def test_coincidence_matching_pairs_nearby_dual_sensor_events():
     record = coincidence_record(matches[0], top_event.to_record(0, 0, {}), bottom_event.to_record(0, 0, {}), {})
     assert record["event_type"] == "coincidence_candidate"
     assert record["confidence_class"] == "coincidence"
+
+
+def test_calibration_template_round_trips(tmp_path):
+    path = tmp_path / "detector_calibration.json"
+
+    write_calibration_template(path)
+    calibration = load_detector_calibration(path)
+
+    assert calibration.geometry.sensor_separation_mm == 12.0
+    assert calibration.pose.top_sensor_label == "top"
+
+
+def test_reconstruct_track_returns_local_sky_direction():
+    static = np.zeros((8, 8), dtype=bool)
+    dynamic = np.zeros_like(static)
+    top = np.zeros((8, 8), dtype=np.uint8)
+    bottom = np.zeros((8, 8), dtype=np.uint8)
+    top[3, 3] = 255
+    bottom[4, 3] = 255
+    top_event = detect_clusters(top, static, dynamic, 200, 1, 10, sensor_label="top")[0]
+    bottom_event = detect_clusters(bottom, static, dynamic, 200, 1, 10, sensor_label="bottom")[0]
+    matches, _, _ = match_coincidences([top_event], [bottom_event], 1, 5)
+    calibration = DetectorCalibration()
+    calibration.geometry.active_width_px = 8
+    calibration.geometry.active_height_px = 8
+    calibration.geometry.pixel_pitch_um = 3
+    calibration.geometry.sensor_separation_mm = 12
+
+    track = reconstruct_track(matches[0], calibration)
+
+    assert "azimuth_degrees_from_true_north" in track
+    assert track["incoming_local_enu_unit"]["up"] > 0.99
