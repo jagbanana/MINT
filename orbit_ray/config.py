@@ -58,6 +58,20 @@ class OutputConfig:
     save_crops: bool = True
     crop_radius: int = 12
     status_interval_seconds: int = 5
+    zero_candidate_status_ttl_seconds: float = 14400.0
+
+
+@dataclass
+class SafetyConfig:
+    enabled: bool = True
+    shutdown_on_unsafe: bool = True
+    consecutive_unsafe_frames: int = 30
+    max_dark_mean: float = 10.0
+    max_dark_std: float = 20.0
+    bright_pixel_threshold: int = 80
+    max_bright_pixel_fraction: float = 0.001
+    max_dynamic_mask_count: int = 5000
+    max_dynamic_additions_per_minute: int = 500
 
 
 @dataclass
@@ -77,6 +91,7 @@ class AppConfig:
     track_reconstruction: TrackReconstructionConfig = field(default_factory=TrackReconstructionConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
 
 

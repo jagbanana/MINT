@@ -48,7 +48,19 @@
     "event_log": "cosmic_events.jsonl",
     "save_crops": true,
     "crop_radius": 12,
-    "status_interval_seconds": 5
+    "status_interval_seconds": 5,
+    "zero_candidate_status_ttl_seconds": 14400.0
+  },
+  "safety": {
+    "enabled": true,
+    "shutdown_on_unsafe": true,
+    "consecutive_unsafe_frames": 30,
+    "max_dark_mean": 10.0,
+    "max_dark_std": 20.0,
+    "bright_pixel_threshold": 80,
+    "max_bright_pixel_fraction": 0.001,
+    "max_dynamic_mask_count": 5000,
+    "max_dynamic_additions_per_minute": 500
   },
   "simulation": {
     "enabled": false,

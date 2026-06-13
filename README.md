@@ -76,6 +76,7 @@ MINT:
 * Logs verified candidate events to append-safe JSON Lines.
 * Saves small grayscale crop images around each event.
 * Writes periodic status snapshots for troubleshooting.
+* Monitors dark-frame noise drift and can shut down on sustained overheat/light-leak risk.
 * Supports simulation mode so the whole pipeline can be tested without waiting for rare events.
 * Scores each single-sensor event with a heuristic quality score, artifact risk score, and confidence class.
 * In two-sensor mode, promotes paired hits to `coincidence_candidate` events.
@@ -234,7 +235,14 @@ Practical mitigations:
 * Use a tiny adhesive copper or aluminum heatsink on the back of each camera board if it fits safely.
 * Keep airflow around the boards when possible.
 * Watch dynamic mask growth and calibration stats.
-* Future work should add rolling dark-baseline adjustment for 24/7 deployments.
+
+MINT includes a conservative safety monitor. It does not read a physical temperature sensor; most UVC cameras do not expose one. Instead, it watches for sustained dark-frame noise drift, excessive bright pixels, and runaway dynamic-mask growth. If `safety.shutdown_on_unsafe` is enabled and the condition lasts for `safety.consecutive_unsafe_frames`, MINT exits with:
+
+```text
+Overheat potential detected, shutting down.
+```
+
+This should be treated as "possible overheating, light leak, or camera setting drift" rather than a precise thermometer. Future work should add rolling dark-baseline adjustment for 24/7 deployments.
 
 ## Detector Calibration And Track Reconstruction
 
@@ -369,6 +377,8 @@ By default, MINT writes runtime output to `orbit_ray_output/`:
 * `crops/*.png`
 * `snapshots/latest_status.json`
 
+MINT only writes candidate records to `cosmic_events.jsonl`; routine zero-candidate status is printed to stdout and `latest_status.json` is overwritten in place. To avoid unbounded captured-log growth, zero-candidate status printing is suppressed after `output.zero_candidate_status_ttl_seconds` (default: 4 hours). Candidate, verified, coincidence, unmatched, persistent, or dynamic-mask activity keeps status printing enabled.
+
 Runtime output is ignored by Git.
 
 Single-sensor events remain useful in two-sensor mode. They are not strong particle evidence on their own, but they help characterize each sensor and can be scrubbed or filtered later during analysis.
@@ -388,7 +398,11 @@ Start with [config.example.json](config.example.json). Common settings include:
 * `detection.trigger_threshold`
 * `detection.calibration_frames`
 * `output.status_interval_seconds`
+* `output.zero_candidate_status_ttl_seconds`
 * `output.save_crops`
+* `safety.enabled`
+* `safety.shutdown_on_unsafe`
+* `safety.max_dark_mean`, `safety.max_dark_std`, and `safety.max_bright_pixel_fraction`
 * `simulation.enabled`
 * `scoring.enabled`
 

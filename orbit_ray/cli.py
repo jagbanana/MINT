@@ -21,8 +21,17 @@ from .detector import (
     verify_candidate,
 )
 from .logging_io import append_jsonl, ensure_output_dirs, write_json
+from .safety import initialize_safety_states, evaluate_frame_safety
 from .scoring import score_event
 from .simulator import SimulationInjector
+
+
+class SafetyShutdown(RuntimeError):
+    """Raised when MINT detects sustained unsafe/noisy sensor behavior."""
+
+    def __init__(self, message: str, status: dict | None = None):
+        super().__init__(message)
+        self.status = status or {}
 
 
 @dataclass
@@ -74,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     sensors = setup_sensors(cv2, config, paths["root"], sensor_configs)
     print("MINT started")
     print(f"Mode: {'two-sensor coincidence' if config.coincidence.enabled else 'single sensor'}")
+    safety_states = initialize_safety_states(sensors)
 
     injector = SimulationInjector(
         interval_seconds=config.simulation.interval_seconds,
@@ -99,6 +109,16 @@ def main(argv: list[str] | None = None) -> int:
             frames = read_sensor_frames(cv2, config, sensors)
             counters["frames"] += 1
             frame_index = counters["frames"]
+
+            check_safety_or_shutdown(
+                frames=frames,
+                sensors=sensors,
+                config=config,
+                safety_states=safety_states,
+                counters=counters,
+                start=start,
+                recent_events=recent_events,
+            )
 
             verified_by_sensor: dict[str, list[CandidateEvent]] = {}
             records_by_event_id: dict[int, dict] = {}
@@ -166,11 +186,17 @@ def main(argv: list[str] | None = None) -> int:
             now = time.monotonic()
             if now - last_status >= config.output.status_interval_seconds:
                 status = build_status(counters, start, sensors, config, recent_events)
-                print_status(status)
+                if should_print_status(status, config):
+                    print_status(status)
                 write_json(paths["snapshots"] / "latest_status.json", status)
                 last_status = now
     except KeyboardInterrupt:
         print("\nMINT stopped.")
+    except SafetyShutdown as exc:
+        print(f"\n{exc}")
+        if exc.status:
+            write_json(paths["snapshots"] / "latest_status.json", exc.status)
+        return 3
     finally:
         for sensor in sensors:
             sensor.capture.release()
@@ -405,6 +431,72 @@ def apply_simulated_coords(gray: np.ndarray, coords: set[tuple[int, int]], inten
             gray[y, x] = intensity
 
 
+def check_safety_or_shutdown(
+    frames: dict[str, np.ndarray],
+    sensors: list[SensorRuntime],
+    config: AppConfig,
+    safety_states: dict[str, object],
+    counters: dict,
+    start: float,
+    recent_events: list[dict],
+) -> None:
+    if not config.safety.enabled:
+        return
+
+    unsafe_messages: list[str] = []
+    for sensor in sensors:
+        state = safety_states[sensor.label]
+        dynamic_additions_per_minute = sensor.dynamic_window_additions / max(
+            0.001,
+            (time.monotonic() - sensor.dynamic_window_start) / 60,
+        )
+        evaluation = evaluate_frame_safety(
+            frames[sensor.label],
+            state,
+            max_dark_mean=config.safety.max_dark_mean,
+            max_dark_std=config.safety.max_dark_std,
+            max_bright_pixel_fraction=config.safety.max_bright_pixel_fraction,
+            bright_pixel_threshold=config.safety.bright_pixel_threshold,
+            max_dynamic_mask_count=config.safety.max_dynamic_mask_count,
+            dynamic_mask_count=int(sensor.dynamic_mask.sum()),
+            max_dynamic_additions_per_minute=config.safety.max_dynamic_additions_per_minute,
+            dynamic_additions_per_minute=dynamic_additions_per_minute,
+        )
+        if evaluation.safe:
+            state.consecutive_unsafe_frames = 0
+            continue
+
+        state.consecutive_unsafe_frames += 1
+        unsafe_messages.append(
+            f"{sensor.label}: {'; '.join(evaluation.reasons)} "
+            f"({state.consecutive_unsafe_frames}/{config.safety.consecutive_unsafe_frames} unsafe frames)"
+        )
+
+    if not unsafe_messages:
+        return
+
+    message = "Safety monitor warning: possible overheat/noise/light-leak drift detected: " + " | ".join(unsafe_messages)
+    print(message)
+    if not config.safety.shutdown_on_unsafe:
+        return
+
+    tripped = [
+        state
+        for state in safety_states.values()
+        if state.consecutive_unsafe_frames >= config.safety.consecutive_unsafe_frames
+    ]
+    if not tripped:
+        return
+
+    status = build_status(counters, start, sensors, config, recent_events)
+    status["shutdown"] = {
+        "reason": "overheat_potential_detected",
+        "message": message,
+        "tripped_sensors": [state.label for state in tripped],
+    }
+    raise SafetyShutdown(f"Overheat potential detected, shutting down. {message}", status)
+
+
 def update_dynamic_windows(sensors: list[SensorRuntime], config: AppConfig) -> None:
     now = time.monotonic()
     for sensor in sensors:
@@ -545,6 +637,29 @@ def print_status(status: dict) -> None:
         f"masks={mask_summary}"
         f"{latest}"
     )
+
+
+def should_print_status(status: dict, config: AppConfig) -> bool:
+    """Return True when a periodic status line is worth appending to stdout logs.
+
+    MINT always rewrites snapshots/latest_status.json. This only suppresses long-running
+    zero-candidate stdout/status-log growth after a configurable troubleshooting window.
+    """
+    ttl = config.output.zero_candidate_status_ttl_seconds
+    if ttl is None or ttl < 0:
+        return True
+    if status["runtime_seconds"] <= ttl:
+        return True
+    counters = status["counters"]
+    candidate_keys = (
+        "sensor_candidates",
+        "verified_sensor_events",
+        "coincidence_events",
+        "unmatched_sensor_events",
+        "persistent_dropped",
+        "dynamic_mask_additions",
+    )
+    return any(counters.get(key, 0) > 0 for key in candidate_keys)
 
 
 def local_timestamp_ms() -> str:

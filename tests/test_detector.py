@@ -14,7 +14,9 @@ from orbit_ray.detector import (
     verify_candidate,
 )
 from orbit_ray.coincidence import coincidence_record, match_coincidences
+from orbit_ray.cli import should_print_status
 from orbit_ray.config import load_config
+from orbit_ray.safety import SensorSafetyState, evaluate_frame_safety
 from orbit_ray.scoring import score_event
 from orbit_ray.simulator import SimulationInjector
 
@@ -119,6 +121,90 @@ def test_config_defaults_to_single_sensor_with_secondary_available():
     assert not config.coincidence.enabled
     assert config.camera.index == 0
     assert config.secondary_camera.index == 1
+    assert config.safety.enabled
+    assert config.safety.shutdown_on_unsafe
+
+
+def test_zero_candidate_status_printing_is_suppressed_after_ttl():
+    config = load_config(None)
+    config.output.zero_candidate_status_ttl_seconds = 10
+    status = {
+        "runtime_seconds": 11,
+        "counters": {
+            "sensor_candidates": 0,
+            "verified_sensor_events": 0,
+            "coincidence_events": 0,
+            "unmatched_sensor_events": 0,
+            "persistent_dropped": 0,
+            "dynamic_mask_additions": 0,
+        },
+    }
+
+    assert not should_print_status(status, config)
+
+
+def test_status_printing_continues_after_ttl_when_candidates_exist():
+    config = load_config(None)
+    config.output.zero_candidate_status_ttl_seconds = 10
+    status = {
+        "runtime_seconds": 11,
+        "counters": {
+            "sensor_candidates": 1,
+            "verified_sensor_events": 0,
+            "coincidence_events": 0,
+            "unmatched_sensor_events": 0,
+            "persistent_dropped": 0,
+            "dynamic_mask_additions": 0,
+        },
+    }
+
+    assert should_print_status(status, config)
+
+
+def test_safety_monitor_flags_bright_noisy_frames():
+    gray = np.zeros((20, 20), dtype=np.uint8)
+    gray[:, :10] = 120
+    state = SensorSafetyState(label="top", baseline_mean=0.0, baseline_std=0.0, baseline_max=0)
+
+    evaluation = evaluate_frame_safety(
+        gray,
+        state,
+        max_dark_mean=10.0,
+        max_dark_std=20.0,
+        max_bright_pixel_fraction=0.001,
+        bright_pixel_threshold=80,
+        max_dynamic_mask_count=5000,
+        dynamic_mask_count=0,
+        max_dynamic_additions_per_minute=500,
+        dynamic_additions_per_minute=0.0,
+    )
+
+    assert not evaluation.safe
+    assert any("dark_mean" in reason for reason in evaluation.reasons)
+    assert any("bright_pixel_fraction" in reason for reason in evaluation.reasons)
+
+
+
+def test_safety_monitor_accepts_clean_dark_frames():
+    gray = np.zeros((20, 20), dtype=np.uint8)
+    state = SensorSafetyState(label="bottom", baseline_mean=0.0, baseline_std=0.0, baseline_max=0)
+
+    evaluation = evaluate_frame_safety(
+        gray,
+        state,
+        max_dark_mean=10.0,
+        max_dark_std=20.0,
+        max_bright_pixel_fraction=0.001,
+        bright_pixel_threshold=80,
+        max_dynamic_mask_count=5000,
+        dynamic_mask_count=0,
+        max_dynamic_additions_per_minute=500,
+        dynamic_additions_per_minute=0.0,
+    )
+
+    assert evaluation.safe
+    assert evaluation.reasons == []
+
 
 
 def test_coincidence_matching_pairs_nearby_dual_sensor_events():
