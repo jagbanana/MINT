@@ -1,8 +1,8 @@
 # MINT
 
-**MINT (Muon Ionization Sensor Tracker) Home-Lab Particle Detector Software & Build**
+**MINT (Muon Ionization Telescope) DIY Subatomic Particle Detector Software & Build**
 
-MINT is experimental particle-detector software built for inexpensive camera sensors. It starts as a dark-frame detector for a single webcam, but also allows for a more sophisticated two-sensor coincidence detector that can separate one-camera noise from events that pass through two independent layers of silicon.
+MINT is subatomic particle-detector software and a build design for inexpensive camera sensors. It starts as a dark-frame detector for a single webcam, but also allows for a more sophisticated two-sensor coincidence detector that can separate one-camera noise from events that pass through two independent layers of silicon.
 
 For about $70, you can build your own 2-sensor detector.
 
@@ -10,13 +10,19 @@ For about $70, you can build your own 2-sensor detector.
 
 More precisely, MINT is a **candidate particle event detector**. A single dark camera can detect transient sensor events, but cannot prove what caused them. A two-sensor coincidence build is much closer to a real particle detector because a penetrating particle can trigger both sensors while local camera noise should remain isolated to one sensor.
 
-## Cosmic Rays are Still a Mystery
+![MINT results visualized](images/mint_web.png)
 
-Cosmic rays are high-energy particles that arrive at Earth from space. By the time they reach sea level, many of the particles we can realistically detect are **secondary cosmic rays**, especially muons: short-lived, highly penetrating particles created when primary cosmic rays slam into atoms high in the atmosphere.
+See a detector in action at [https://mint.jaglab.org](https://mint.jaglab.org).
 
-Scientists know some cosmic rays come from supernova remnants, active galaxies, and other extreme environments. But the highest-energy cosmic rays remain mysterious. Something out there is accelerating particles to extremely high energies, far beyond what human-built accelerators can reach, and we are still piecing together exactly where and how.
+## What MINT Detects and Why It's Exciting
 
-MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or spare laptop. It will not replace a scientific detector array, but it lets you build a listening post and can help contribute to our collective understanding of these high-energy events.
+Muons are secondary particles created by nature's particle collider: high-energy cosmic rays colliding with protons and neutrons in the upper atmosphere, breaking them into subatomic particles. Muons carry an electric charge identical to an electron or positron but with 200 times the mass. As these heavy, charged particles pass through a silicon sensor at 99.9% the speed of light, their powerful electromagnetic field frees electrons from silicon atoms along the path, generating a hit on the camera.
+
+A small home particle detector can log a local record of candidate muon hit patterns, directions, and rates correlated with atmospheric and cosmic events. While we know many cosmic rays originate from solar flares and supernovae, the ultimate sources of the most energetic particles remain a mystery. Engaging in low-cost, distributed data collection helps bridge the gap in our understanding of these deep-space accelerators.
+
+MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or spare laptop. It lets you build a listening post and can help contribute to our collective understanding of these high-energy events.
+
+![MINT working](images/mint_running.png)
 
 ## What MINT Is Actually Detecting
 
