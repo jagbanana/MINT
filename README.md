@@ -4,7 +4,9 @@
 
 MINT is experimental particle-detector software built for inexpensive camera sensors. It starts as a dark-frame detector for a single webcam, but also allows for a more sophisticated two-sensor coincidence detector that can separate one-camera noise from events that pass through two independent layers of silicon.
 
-For about $70, you can build your own 2-sensor detector. 
+For about $70, you can build your own 2-sensor detector.
+
+![MINT stacked two-camera detector](images/mint_detector.jpg)
 
 More precisely, MINT is a **candidate particle event detector**. A single dark camera can detect transient sensor events, but cannot prove what caused them. A two-sensor coincidence build is much closer to a real particle detector because a penetrating particle can trigger both sensors while local camera noise should remain isolated to one sensor.
 
