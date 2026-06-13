@@ -24,6 +24,20 @@ MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or s
 
 ![MINT working](images/mint_running.png)
 
+## Who This is For
+
+If you have an interest in home-based science, physics, and astronomy, then this is great for you.
+
+It helps to have a basic understanding of:
+* Python and command line interfaces
+* Astrophotography terms and calibration
+* CMOS sensors
+* Working with raw data
+
+The hardest part of this setup is calibrating your sensors and identifying the right thresholds. It may take hundreds of runs to set the right parameters. Each sensor is unique.
+
+But fortunately, you can use Claude Code or Codex to help you with all aspects of this project. I even have an OpenClaw Agent acting as my lab partner to help with the tests and log parsing.
+
 ## What MINT Is Actually Detecting
 
 A cosmic ray is usually a high-energy particle arriving from space, often a proton or atomic nucleus. MINT is probably not detecting that original primary cosmic ray directly. Instead, it is looking for evidence of **secondary muons** created after the primary cosmic ray hits Earth's upper atmosphere.
@@ -369,11 +383,39 @@ Explicit config:
 python -m orbit_ray.cli --config config.example.json
 ```
 
+Override the trigger threshold for a test run:
+
+```powershell
+python -m orbit_ray.cli --config config.example.json --threshold 20
+```
+
 If installed as a package, the CLI command is:
 
 ```powershell
 mint --simulate
 ```
+
+## Calibration And Threshold Tuning
+
+Expect calibration and threshold tuning to be iterative. MINT is intentionally conservative: it should first prove that the camera, dark-frame capture, event logging, and crop saving all work before you treat any candidate as interesting.
+
+A practical startup sequence:
+
+1. **Verify camera indexes.** Run a short uncapped brightness check to confirm which physical sensor maps to each `camera.index` / `secondary_camera.index`. Cap and uncap one sensor at a time so the mapping is obvious.
+2. **Calibrate fully capped.** With both sensors capped and light-tight, start MINT and inspect `calibration_summary_<sensor>.json`. Good dark calibration usually has very low `dark_mean`, low `dark_std`, and few or no static hot pixels.
+3. **Start with a low threshold sweep.** Try short runs at thresholds such as `1`, `5`, `10`, `20`, `40`, and `80`. Low thresholds should produce occasional single-sensor blips; high thresholds may produce none. That is useful data, not failure.
+4. **Choose an operating threshold.** For an early two-sensor build, pick the lowest threshold that produces a manageable unmatched-event rate without flooding the log. Then run for a few hours and check whether both sensors produce occasional unmatched events.
+5. **Treat coincidences differently.** `unmatched_sensor_candidate` records are mostly sensor/noise characterization. `coincidence_candidate` records are the stronger evidence path because both sensors fired within the configured frame and centroid windows.
+6. **Retune after hardware changes.** Reassembly, cap changes, sensor spacing, camera gain/exposure, temperature, and light leaks can all change the right threshold.
+
+If one capped sensor reports a perfectly black calibration while the other shows occasional low-level pixels, do not assume the camera is dead. Uncap that sensor briefly and verify it returns a normal light signal, then cap it again before dark-frame runs.
+
+Useful files while tuning:
+
+* `snapshots/latest_status.json`: current frame count, FPS, event counters, and recent events.
+* `cosmic_events.jsonl`: append-only candidate event records.
+* `crops/*.png`: small image crops around detected candidates.
+* `calibration_summary_<sensor>.json`: startup dark-frame calibration for each sensor.
 
 ## Output
 
