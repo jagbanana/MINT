@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
@@ -14,6 +15,57 @@ class CalibrationSummary:
     dark_std: float
     max_intensity: int
     static_hot_pixels: int
+
+
+class RecurringCoordinateTracker:
+    """Track flickering candidate coordinates and dynamically mask repeat offenders.
+
+    Persistent bright pixels are masked when they remain bright in the next frame. Some
+    camera artifacts only flash for a single frame but recur at the same pixel over and
+    over. This tracker catches that second pattern using a rolling frame window.
+    """
+
+    def __init__(self, repeat_threshold: int, window_frames: int, mask_radius_pixels: int = 1):
+        self.repeat_threshold = max(1, repeat_threshold)
+        self.window_frames = max(1, window_frames)
+        self.mask_radius_pixels = max(0, mask_radius_pixels)
+        self._hits: dict[tuple[int, int], deque[int]] = {}
+
+    def observe_and_mask(self, dynamic_mask: np.ndarray, candidate: CandidateEvent) -> int:
+        """Record a verified candidate and mask its neighborhood if it recurs enough.
+
+        Returns the number of newly masked pixels. Simulated candidates are ignored so
+        deterministic simulation/demo runs do not self-suppress.
+        """
+        if candidate.simulated:
+            return 0
+
+        key = (int(round(candidate.centroid_y)), int(round(candidate.centroid_x)))
+        frames = self._hits.setdefault(key, deque())
+        cutoff = candidate.frame_index - self.window_frames
+        while frames and frames[0] < cutoff:
+            frames.popleft()
+        frames.append(candidate.frame_index)
+
+        if len(frames) < self.repeat_threshold:
+            return 0
+
+        additions = mask_neighborhood(dynamic_mask, key, self.mask_radius_pixels)
+        frames.clear()
+        return additions
+
+
+def mask_neighborhood(dynamic_mask: np.ndarray, center_yx: tuple[int, int], radius: int) -> int:
+    """Mask a square neighborhood around ``center_yx`` and return new additions."""
+    y, x = center_yx
+    h, w = dynamic_mask.shape[:2]
+    top = max(0, y - radius)
+    bottom = min(h, y + radius + 1)
+    left = max(0, x - radius)
+    right = min(w, x + radius + 1)
+    before = int(dynamic_mask.sum())
+    dynamic_mask[top:bottom, left:right] = True
+    return int(dynamic_mask.sum()) - before
 
 
 @dataclass

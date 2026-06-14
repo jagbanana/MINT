@@ -13,6 +13,7 @@ from .config import AppConfig, CameraConfig, load_config
 from .detector import (
     CalibrationSummary,
     CandidateEvent,
+    RecurringCoordinateTracker,
     apply_dynamic_mask,
     calibrate,
     crop_around,
@@ -46,6 +47,7 @@ class SensorRuntime:
     pending: list[tuple[CandidateEvent, np.ndarray]] = field(default_factory=list)
     dynamic_window_start: float = field(default_factory=time.monotonic)
     dynamic_window_additions: int = 0
+    recurring_tracker: RecurringCoordinateTracker | None = None
 
     @property
     def label(self) -> str:
@@ -99,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         "unmatched_sensor_events": 0,
         "persistent_dropped": 0,
         "dynamic_mask_additions": 0,
+        "recurring_dropped": 0,
     }
     recent_events: list[dict] = []
     start = time.monotonic()
@@ -132,8 +135,11 @@ def main(argv: list[str] | None = None) -> int:
                     counters,
                     start,
                 )
-                verified_by_sensor[sensor.label] = verified
+                kept_verified: list[CandidateEvent] = []
                 for candidate in verified:
+                    if maybe_drop_recurring_candidate(sensor, candidate, config, counters):
+                        continue
+                    kept_verified.append(candidate)
                     records_by_event_id[id(candidate)] = build_sensor_event_record(
                         sensor=sensor,
                         candidate=candidate,
@@ -143,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                         counters=counters,
                         start=start,
                     )
+                verified_by_sensor[sensor.label] = kept_verified
                 sensor.pending = []
 
             if config.coincidence.enabled and len(sensors) == 2:
@@ -238,6 +245,13 @@ def setup_sensors(cv2, config: AppConfig, output_dir: Path, camera_configs: list
             config.detection.hot_pixel_fraction,
         )
         dynamic_mask = np.zeros_like(static_mask, dtype=bool)
+        recurring_tracker = None
+        if config.detection.recurring_coordinate_mask_enabled:
+            recurring_tracker = RecurringCoordinateTracker(
+                repeat_threshold=config.detection.recurring_coordinate_repeat_threshold,
+                window_frames=config.detection.recurring_coordinate_window_frames,
+                mask_radius_pixels=config.detection.recurring_coordinate_mask_radius_pixels,
+            )
         calibration_record = {
             "timestamp": utc_timestamp_ms(),
             "sensor_label": camera_config.label,
@@ -256,6 +270,7 @@ def setup_sensors(cv2, config: AppConfig, output_dir: Path, camera_configs: list
                 dynamic_mask=dynamic_mask,
                 calibration=calibration,
                 calibration_record=calibration_record,
+                recurring_tracker=recurring_tracker,
             )
         )
     if len(sensors) == 1:
@@ -300,6 +315,25 @@ def verify_pending_events(
             counters["dynamic_mask_additions"] += additions
             counters["persistent_dropped"] += 1
     return verified
+
+
+def maybe_drop_recurring_candidate(
+    sensor: SensorRuntime,
+    candidate: CandidateEvent,
+    config: AppConfig,
+    counters: dict,
+) -> bool:
+    if not config.detection.recurring_coordinate_mask_enabled or sensor.recurring_tracker is None:
+        return False
+
+    additions = sensor.recurring_tracker.observe_and_mask(sensor.dynamic_mask, candidate)
+    if additions <= 0:
+        return False
+
+    sensor.dynamic_window_additions += additions
+    counters["dynamic_mask_additions"] += additions
+    counters["recurring_dropped"] += 1
+    return True
 
 
 def get_candidate_frame(sensor: SensorRuntime, candidate: CandidateEvent) -> np.ndarray:
@@ -598,6 +632,7 @@ def build_status(
             sensor.label: {
                 "static_mask_count": int(sensor.static_mask.sum()),
                 "dynamic_mask_count": int(sensor.dynamic_mask.sum()),
+                "recurring_coordinate_mask_enabled": sensor.recurring_tracker is not None,
                 "camera_settings": sensor.camera_settings,
                 "calibration": sensor.calibration,
             }
@@ -634,6 +669,7 @@ def print_status(status: dict) -> None:
         f"coincidence={counters['coincidence_events']} "
         f"unmatched={counters['unmatched_sensor_events']} "
         f"persistent={counters['persistent_dropped']} "
+        f"recurring={counters.get('recurring_dropped', 0)} "
         f"masks={mask_summary}"
         f"{latest}"
     )
@@ -658,6 +694,7 @@ def should_print_status(status: dict, config: AppConfig) -> bool:
         "unmatched_sensor_events",
         "persistent_dropped",
         "dynamic_mask_additions",
+        "recurring_dropped",
     )
     return any(counters.get(key, 0) > 0 for key in candidate_keys)
 

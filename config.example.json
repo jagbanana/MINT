@@ -23,7 +23,11 @@
     "hot_pixel_fraction": 0.05,
     "calibration_frames": 300,
     "max_cluster_size": 25,
-    "dynamic_mask_max_additions_per_minute": 500
+    "dynamic_mask_max_additions_per_minute": 500,
+    "recurring_coordinate_mask_enabled": true,
+    "recurring_coordinate_repeat_threshold": 5,
+    "recurring_coordinate_window_frames": 10000,
+    "recurring_coordinate_mask_radius_pixels": 1
   },
   "coincidence": {
     "enabled": false,

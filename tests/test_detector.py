@@ -7,6 +7,7 @@ from orbit_ray.calibration import (
     write_calibration_template,
 )
 from orbit_ray.detector import (
+    RecurringCoordinateTracker,
     apply_dynamic_mask,
     calibrate,
     crop_around,
@@ -75,6 +76,40 @@ def test_simulator_injected_event_flows_through_detection():
     assert len(events) == 1
     assert events[0].simulated
 
+
+
+def test_recurring_coordinate_tracker_masks_flickering_pixel():
+    gray = np.zeros((8, 8), dtype=np.uint8)
+    gray[3, 4] = 230
+    static = np.zeros_like(gray, dtype=bool)
+    dynamic = np.zeros_like(gray, dtype=bool)
+    tracker = RecurringCoordinateTracker(repeat_threshold=3, window_frames=10, mask_radius_pixels=1)
+
+    additions = []
+    for frame_index in (1, 4, 7):
+        event = detect_clusters(gray, static, dynamic, 200, frame_index, 10)[0]
+        additions.append(tracker.observe_and_mask(dynamic, event))
+
+    assert additions[:2] == [0, 0]
+    assert additions[2] == 9
+    assert dynamic[3, 4]
+    assert dynamic[2, 3]
+    assert dynamic[4, 5]
+    assert not detect_clusters(gray, static, dynamic, 200, 8, 10)
+
+
+def test_recurring_coordinate_tracker_respects_frame_window():
+    gray = np.zeros((8, 8), dtype=np.uint8)
+    gray[3, 4] = 230
+    static = np.zeros_like(gray, dtype=bool)
+    dynamic = np.zeros_like(gray, dtype=bool)
+    tracker = RecurringCoordinateTracker(repeat_threshold=3, window_frames=5, mask_radius_pixels=0)
+
+    for frame_index in (1, 10, 20):
+        event = detect_clusters(gray, static, dynamic, 200, frame_index, 10)[0]
+        assert tracker.observe_and_mask(dynamic, event) == 0
+
+    assert not dynamic[3, 4]
 
 def test_crop_around_clamps_to_frame_edges():
     gray = np.arange(25, dtype=np.uint8).reshape(5, 5)

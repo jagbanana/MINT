@@ -25,6 +25,10 @@ class DetectionConfig:
     calibration_frames: int = 300
     max_cluster_size: int = 25
     dynamic_mask_max_additions_per_minute: int = 500
+    recurring_coordinate_mask_enabled: bool = True
+    recurring_coordinate_repeat_threshold: int = 5
+    recurring_coordinate_window_frames: int = 10000
+    recurring_coordinate_mask_radius_pixels: int = 1
 
 
 @dataclass

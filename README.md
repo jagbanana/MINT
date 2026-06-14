@@ -407,6 +407,7 @@ A practical startup sequence:
 4. **Choose an operating threshold.** For an early two-sensor build, pick the lowest threshold that produces a manageable unmatched-event rate without flooding the log. Then run for a few hours and check whether both sensors produce occasional unmatched events.
 5. **Treat coincidences differently.** `unmatched_sensor_candidate` records are mostly sensor/noise characterization. `coincidence_candidate` records are the stronger evidence path because both sensors fired within the configured frame and centroid windows.
 6. **Retune after hardware changes.** Reassembly, cap changes, sensor spacing, camera gain/exposure, temperature, and light leaks can all change the right threshold.
+7. **Mask recurring coordinates.** Some sensor artifacts do not persist into the next frame, but flash repeatedly at the same coordinate. The recurring-coordinate mask can dynamically suppress those flickering pixels without raising the global trigger threshold.
 
 If one capped sensor reports a perfectly black calibration while the other shows occasional low-level pixels, do not assume the camera is dead. Uncap that sensor briefly and verify it returns a normal light signal, then cap it again before dark-frame runs.
 
@@ -447,6 +448,7 @@ Start with [config.example.json](config.example.json). Common settings include:
 * `track_reconstruction.calibration_file`
 * `detection.trigger_threshold`
 * `detection.calibration_frames`
+* `detection.recurring_coordinate_mask_enabled` and related recurring-coordinate mask settings
 * `output.status_interval_seconds`
 * `output.zero_candidate_status_ttl_seconds`
 * `output.save_crops`
