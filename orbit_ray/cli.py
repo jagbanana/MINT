@@ -8,7 +8,7 @@ import time
 import numpy as np
 
 from .calibration import load_detector_calibration, reconstruct_track, write_calibration_template
-from .coincidence import coincidence_record, match_coincidences
+from .verification import match_verified_tracks, verified_track_record
 from .config import AppConfig, CameraConfig, load_config
 from .detector import (
     CalibrationSummary,
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     event_log = paths["root"] / config.output.event_log
 
     sensor_configs = [config.camera]
-    if config.coincidence.enabled:
+    if config.verification.enabled:
         sensor_configs.append(config.secondary_camera)
 
     detector_calibration = None
@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sensors = setup_sensors(cv2, config, paths["root"], sensor_configs)
     print("MINT started")
-    print(f"Mode: {'two-sensor coincidence' if config.coincidence.enabled else 'single sensor'}")
+    print(f"Mode: {'two-sensor verification' if config.verification.enabled else 'single sensor'}")
     safety_states = initialize_safety_states(sensors)
 
     injector = SimulationInjector(
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         "frames": 0,
         "sensor_candidates": 0,
         "verified_sensor_events": 0,
-        "coincidence_events": 0,
+        "verified_track_events": 0,
         "unmatched_sensor_events": 0,
         "persistent_dropped": 0,
         "dynamic_mask_additions": 0,
@@ -152,8 +152,8 @@ def main(argv: list[str] | None = None) -> int:
                 verified_by_sensor[sensor.label] = kept_verified
                 sensor.pending = []
 
-            if config.coincidence.enabled and len(sensors) == 2:
-                new_records = log_coincidence_results(
+            if config.verification.enabled and len(sensors) == 2:
+                new_records = log_verification_results(
                     sensors,
                     verified_by_sensor,
                     records_by_event_id,
@@ -391,7 +391,7 @@ def build_sensor_event_record(
     )
 
 
-def log_coincidence_results(
+def log_verification_results(
     sensors: list[SensorRuntime],
     verified_by_sensor: dict[str, list[CandidateEvent]],
     records_by_event_id: dict[int, dict],
@@ -402,11 +402,11 @@ def log_coincidence_results(
 ) -> list[dict]:
     primary = sensors[0]
     secondary = sensors[1]
-    matches, unmatched_primary, unmatched_secondary = match_coincidences(
+    matches, unmatched_primary, unmatched_secondary = match_verified_tracks(
         verified_by_sensor.get(primary.label, []),
         verified_by_sensor.get(secondary.label, []),
-        config.coincidence.max_frame_delta,
-        config.coincidence.max_centroid_distance_pixels,
+        config.verification.max_frame_delta,
+        config.verification.max_centroid_distance_pixels,
     )
     written: list[dict] = []
     camera_settings = {
@@ -415,7 +415,7 @@ def log_coincidence_results(
     }
     for match in matches:
         track = reconstruct_track(match, detector_calibration) if detector_calibration else None
-        record = coincidence_record(
+        record = verified_track_record(
             match,
             records_by_event_id[id(match.primary)],
             records_by_event_id[id(match.secondary)],
@@ -423,10 +423,10 @@ def log_coincidence_results(
             track,
         )
         append_jsonl(event_log, record)
-        counters["coincidence_events"] += 1
+        counters["verified_track_events"] += 1
         written.append(record)
 
-    if config.coincidence.log_unmatched_sensor_events:
+    if config.verification.log_unmatched_sensor_events:
         for candidate in unmatched_primary + unmatched_secondary:
             record = records_by_event_id[id(candidate)]
             record["event_type"] = "unmatched_sensor_candidate"
@@ -451,7 +451,7 @@ def maybe_inject_simulation(
     if not coords:
         return simulated
     simulated[first.label] = coords
-    if config.coincidence.enabled:
+    if config.verification.enabled:
         for sensor in sensors[1:]:
             apply_simulated_coords(frames[sensor.label], coords, config.simulation.intensity)
             simulated[sensor.label] = set(coords)
@@ -624,7 +624,7 @@ def build_status(
     elapsed = max(0.001, time.monotonic() - start)
     return {
         "timestamp": utc_timestamp_ms(),
-        "mode": "two-sensor coincidence" if config.coincidence.enabled else "single sensor",
+        "mode": "two-sensor verification" if config.verification.enabled else "single sensor",
         "runtime_seconds": elapsed,
         "fps_average": counters["frames"] / elapsed,
         "counters": counters,
@@ -647,8 +647,8 @@ def print_status(status: dict) -> None:
     latest = ""
     if status["recent_events"]:
         event = status["recent_events"][-1]
-        if event.get("event_type") == "coincidence_candidate":
-            latest = " latest=coincidence"
+        if event.get("event_type") == "verified_track_candidate":
+            latest = " latest=verified_track"
         else:
             score = event.get("score") or {}
             latest = (
@@ -666,7 +666,7 @@ def print_status(status: dict) -> None:
         f"fps={status['fps_average']:.2f} "
         f"candidates={counters['sensor_candidates']} "
         f"sensor_verified={counters['verified_sensor_events']} "
-        f"coincidence={counters['coincidence_events']} "
+        f"verified_tracks={counters['verified_track_events']} "
         f"unmatched={counters['unmatched_sensor_events']} "
         f"persistent={counters['persistent_dropped']} "
         f"recurring={counters.get('recurring_dropped', 0)} "
@@ -690,7 +690,7 @@ def should_print_status(status: dict, config: AppConfig) -> bool:
     candidate_keys = (
         "sensor_candidates",
         "verified_sensor_events",
-        "coincidence_events",
+        "verified_track_events",
         "unmatched_sensor_events",
         "persistent_dropped",
         "dynamic_mask_additions",

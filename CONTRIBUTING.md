@@ -16,4 +16,4 @@ Please avoid committing local capture output, event crops, calibration summaries
 
 ## Scientific Claims
 
-Use careful language in issues, pull requests, and docs. A single dark-covered webcam can identify candidate transient sensor events, but it does not confirm a cosmic ray by itself. Coincidence detection with multiple sensors is the likely path toward stronger confidence.
+Use careful language in issues, pull requests, and docs. A single dark-covered webcam can identify candidate transient sensor events, but it does not confirm a cosmic ray by itself. Verification detection with multiple sensors is the likely path toward stronger confidence.

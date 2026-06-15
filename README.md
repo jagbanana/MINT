@@ -2,13 +2,15 @@
 
 **MINT (Muon Ionization Telescope) DIY Subatomic Particle Detector Software & Build**
 
-MINT is subatomic particle-detector software and a build design for inexpensive camera sensors. It starts as a dark-frame detector for a single webcam, but also allows for a more sophisticated two-sensor coincidence detector that can separate one-camera noise from events that pass through two independent layers of silicon.
+MINT is subatomic particle-detector software and a build design for inexpensive camera sensors. It starts as a dark-frame detector for a single webcam, but also allows for a more sophisticated two-sensor verification detector that can separate one-camera noise from events that pass through two independent layers of silicon. 
 
 For about $70, you can build your own 2-sensor detector.
 
 ![MINT stacked two-camera detector](images/mint_detector.jpg)
 
-More precisely, MINT is a **candidate particle event detector**. A single dark camera can detect transient sensor events, but cannot prove what caused them. A two-sensor coincidence build is much closer to a real particle detector because a penetrating particle can trigger both sensors while local camera noise should remain isolated to one sensor.
+More precisely, MINT is a **candidate particle event detector**. A single dark camera can detect transient sensor events, but cannot prove what caused them. A two-sensor verification build is much closer to a real particle detector because a penetrating particle can trigger both sensors while local camera noise should remain isolated to one sensor.
+
+With my current 2-sensor configuration (e.g. configurable thresholds), my system has a *0.038% per-event chance* of generating a false positive. It can be tuned to be even more precise.
 
 ![MINT results visualized](images/mint_web.png)
 
@@ -80,7 +82,7 @@ There is still useful science-adjacent work in local muon direction and timing:
 * Rate over time: event rate can vary with atmospheric pressure, altitude, shielding, and detector stability.
 * Barometric effect: higher air pressure usually means slightly fewer ground-level muons because the atmosphere is effectively thicker.
 * Building and shielding effects: basement walls, soil, concrete, or nearby structures may suppress some directions.
-* Coincidence purity: two-sensor coincidence rates can be compared against single-sensor transient rates.
+* Verification purity: two-sensor verification rates can be compared against single-sensor transient rates.
 * Detector stability: dark current, hot pixels, thermal drift, false positives, and threshold behavior can be measured over time.
 
 The big unlock is publishing calibrated open data: timestamp, location, detector orientation, geometry, environmental metadata, calibration summaries, event crops, and direction histograms. MINT is not a source-discovery instrument, but it can become a reproducible local muon monitor.
@@ -101,7 +103,7 @@ MINT:
 * Monitors dark-frame noise drift and can shut down on sustained overheat/light-leak risk.
 * Supports simulation mode so the whole pipeline can be tested without waiting for rare events.
 * Scores each single-sensor event with a heuristic quality score, artifact risk score, and confidence class.
-* In two-sensor mode, promotes paired hits to `coincidence_candidate` events.
+* In two-sensor mode, promotes paired hits to `verified_track_candidate` events.
 * Optionally reconstructs local arrival direction when a detector calibration file is available.
 
 ## Detector Modes
@@ -116,11 +118,13 @@ python -m orbit_ray.cli
 
 A single dark-covered webcam can identify candidate transient sensor events. It cannot, by itself, confirm that an event was a cosmic ray. Single-camera detections may be real particle interactions, thermal noise, hot pixels, electronics artifacts, or environmental radiation.
 
-### Two-Sensor Coincidence Mode
+### Two-Sensor Verification Mode
 
-Two-sensor mode opens two cameras, calibrates them independently, runs the same transient detector on both streams, and then looks for events that appear on both sensors within a configurable frame and centroid-distance window.
+Two-sensor mode opens two cameras, calibrates them independently, runs the same transient detector on both streams, and then looks for events that appear on both sensors within a configurable frame and centroid-distance window. This greatly improves the confidence in readings.
 
-This technique is a small version of a **coincidence telescope**. Random thermal noise on one sensor should not happen at nearly the same time and place on a second independent sensor. A penetrating muon, however, can pass through both sensor layers.
+As noted at the top, with my current 2-sensor setup, there is only a 0.038% per-event chance of generating a false positive. This can be tightened even further based on the configuration options here.
+
+This technique is a small version of a **two-layer verification telescope**. Random thermal noise on one sensor should not happen at nearly the same time and place on a second independent sensor. A penetrating muon, however, can pass through both sensor layers.
 
 The current implementation assumes the two sensors are reasonably aligned by the physical build: identical camera boards stacked vertically using the boards' pre-drilled mounting holes and rigid standoffs. A future alignment workflow could map offsets between sensors and compensate for rotation, translation, or scale differences.
 
@@ -128,7 +132,7 @@ Enable it in config:
 
 ```json
 {
-  "coincidence": {
+  "verification": {
     "enabled": true,
     "max_frame_delta": 1,
     "max_centroid_distance_pixels": 12.0,
@@ -153,7 +157,7 @@ python -m orbit_ray.cli --config config.example.json
 
 In two-sensor mode, JSONL records may include:
 
-* `coincidence_candidate`: paired transient detected on both sensors.
+* `verified_track_candidate`: paired transient detected on both sensors.
 * `unmatched_sensor_candidate`: transient detected on only one sensor. These are still useful for troubleshooting sensor noise, threshold settings, heat drift, and light leaks.
 
 ## How It Works
@@ -191,13 +195,13 @@ The two-sensor pipeline runs that detector independently for each camera, then a
 [Verified Top Sensor Transients]      [Verified Bottom Sensor Transients]
                  |                         |
                  v                         v
-             [Frame + Centroid Coincidence Matcher]
+             [Frame + Centroid Verification Matcher]
                              |
                              v
-                  [Coincidence Event Log Record]
+                  [Verified Track Event Log Record]
 ```
 
-During calibration, MINT captures a stack of dark frames and marks pixels that are repeatedly bright as static hot pixels. During capture, it looks for pixels above the trigger threshold, groups contiguous pixels into clusters, and holds each candidate for one frame. If the same coordinates are still bright in frame `t+1`, the candidate is treated as persistent noise and added to the runtime mask. If the signal disappears, it becomes a verified transient. In two-sensor mode, verified transients from both sensors are compared for coincidence.
+During calibration, MINT captures a stack of dark frames and marks pixels that are repeatedly bright as static hot pixels. During capture, it looks for pixels above the trigger threshold, groups contiguous pixels into clusters, and holds each candidate for one frame. If the same coordinates are still bright in frame `t+1`, the candidate is treated as persistent noise and added to the runtime mask. If the signal disappears, it becomes a verified transient. In two-sensor mode, verified transients from both sensors are compared for verification.
 
 ## Hardware Recommendation
 
@@ -245,7 +249,7 @@ Build notes:
 * Block light at the lens/sensor path, but leave room for heat to escape.
 * Lens removal may improve the physical stack, but validate the camera module mechanically before committing to that path.
 
-Spacing matters. A very wide separation creates a narrower acceptance angle and may reduce the hit rate dramatically. A tight 10-15 mm separation is a better first build because it gives the code a fighting chance to see coincidences while you are still experimenting.
+Spacing matters. A very wide separation creates a narrower acceptance angle and may reduce the hit rate dramatically. A tight 10-15 mm separation is a better first build because it gives the code a fighting chance to see verified tracks while you are still experimenting.
 
 ## Thermal Notes
 
@@ -331,7 +335,7 @@ The first calibration workflow is intentionally manual:
 7. Start with zero offset/rotation between sensors if the boards are stacked using shared mounting holes.
 8. Refine `bottom_to_top_alignment` later using a controlled dim-light or pinhole calibration routine.
 
-Avoid a focused laser on a bare sensor. A dim diffused LED, masked aperture, or controlled corner illumination target is safer for a future alignment workflow. Once calibrated, coincidence records include a `track` object with local east/north/up unit vector, azimuth from true north, and elevation.
+Avoid a focused laser on a bare sensor. A dim diffused LED, masked aperture, or controlled corner illumination target is safer for a future alignment workflow. Once calibrated, verified-track records include a `track` object with local east/north/up unit vector, azimuth from true north, and elevation.
 
 The current reconstruction code applies yaw and sensor geometry. Pitch and roll are part of the calibration model, but full tilt compensation is reserved for the next calibration pass. Your filled-in `detector_calibration.json` is ignored by Git because it may contain private location data; use [detector_calibration.example.json](detector_calibration.example.json) as the public template.
 
@@ -345,7 +349,7 @@ Each single-sensor event includes a heuristic score:
 
 The score currently considers signal strength, cluster shape, isolation from masked pixels, calibration stability, recent event rate, and dynamic mask activity.
 
-Treat this as an artifact-rejection quality score, not a cosmic-ray probability. In two-sensor mode, `coincidence_candidate` records are the stronger evidence path.
+Treat this as an artifact-rejection quality score, not a cosmic-ray probability. In two-sensor mode, `verified_track_candidate` records are the stronger evidence path.
 
 ## Setup
 
@@ -405,7 +409,7 @@ A practical startup sequence:
 2. **Calibrate fully capped.** With both sensors capped and light-tight, start MINT and inspect `calibration_summary_<sensor>.json`. Good dark calibration usually has very low `dark_mean`, low `dark_std`, and few or no static hot pixels.
 3. **Start with a low threshold sweep.** Try short runs at thresholds such as `1`, `5`, `10`, `20`, `40`, and `80`. Low thresholds should produce occasional single-sensor blips; high thresholds may produce none. That is useful data, not failure.
 4. **Choose an operating threshold.** For an early two-sensor build, pick the lowest threshold that produces a manageable unmatched-event rate without flooding the log. Then run for a few hours and check whether both sensors produce occasional unmatched events.
-5. **Treat coincidences differently.** `unmatched_sensor_candidate` records are mostly sensor/noise characterization. `coincidence_candidate` records are the stronger evidence path because both sensors fired within the configured frame and centroid windows.
+5. **Treat verified tracks differently.** `unmatched_sensor_candidate` records are mostly sensor/noise characterization. `verified_track_candidate` records are the stronger evidence path because both sensors fired within the configured frame and centroid windows.
 6. **Retune after hardware changes.** Reassembly, cap changes, sensor spacing, camera gain/exposure, temperature, and light leaks can all change the right threshold.
 7. **Mask recurring coordinates.** Some sensor artifacts do not persist into the next frame, but flash repeatedly at the same coordinate. The recurring-coordinate mask can dynamically suppress those flickering pixels without raising the global trigger threshold.
 
@@ -428,7 +432,7 @@ By default, MINT writes runtime output to `orbit_ray_output/`:
 * `crops/*.png`
 * `snapshots/latest_status.json`
 
-MINT only writes candidate records to `cosmic_events.jsonl`; routine zero-candidate status is printed to stdout and `latest_status.json` is overwritten in place. To avoid unbounded captured-log growth, zero-candidate status printing is suppressed after `output.zero_candidate_status_ttl_seconds` (default: 4 hours). Candidate, verified, coincidence, unmatched, persistent, or dynamic-mask activity keeps status printing enabled.
+MINT only writes candidate records to `cosmic_events.jsonl`; routine zero-candidate status is printed to stdout and `latest_status.json` is overwritten in place. To avoid unbounded captured-log growth, zero-candidate status printing is suppressed after `output.zero_candidate_status_ttl_seconds` (default: 4 hours). Candidate, verified, verification, unmatched, persistent, or dynamic-mask activity keeps status printing enabled.
 
 Runtime output is ignored by Git.
 
@@ -440,10 +444,10 @@ Start with [config.example.json](config.example.json). Common settings include:
 
 * `camera.index`, `camera.label`, `camera.width`, `camera.height`, and `camera.fps`
 * `secondary_camera.index` and `secondary_camera.label`
-* `coincidence.enabled`
-* `coincidence.max_frame_delta`
-* `coincidence.max_centroid_distance_pixels`
-* `coincidence.log_unmatched_sensor_events`
+* `verification.enabled`
+* `verification.max_frame_delta`
+* `verification.max_centroid_distance_pixels`
+* `verification.log_unmatched_sensor_events`
 * `track_reconstruction.enabled`
 * `track_reconstruction.calibration_file`
 * `detection.trigger_threshold`

@@ -7,20 +7,20 @@ from .detector import CandidateEvent, utc_timestamp_ms
 
 
 @dataclass
-class CoincidenceMatch:
+class VerifiedTrackMatch:
     primary: CandidateEvent
     secondary: CandidateEvent
     frame_delta: int
     centroid_distance_pixels: float
 
 
-def match_coincidences(
+def match_verified_tracks(
     primary_events: list[CandidateEvent],
     secondary_events: list[CandidateEvent],
     max_frame_delta: int,
     max_centroid_distance_pixels: float,
-) -> tuple[list[CoincidenceMatch], list[CandidateEvent], list[CandidateEvent]]:
-    matches: list[CoincidenceMatch] = []
+) -> tuple[list[VerifiedTrackMatch], list[CandidateEvent], list[CandidateEvent]]:
+    matches: list[VerifiedTrackMatch] = []
     used_secondary: set[int] = set()
 
     for primary in primary_events:
@@ -43,7 +43,7 @@ def match_coincidences(
         if best_index is not None and best_distance is not None and best_delta is not None:
             used_secondary.add(best_index)
             matches.append(
-                CoincidenceMatch(
+                VerifiedTrackMatch(
                     primary=primary,
                     secondary=secondary_events[best_index],
                     frame_delta=best_delta,
@@ -58,21 +58,21 @@ def match_coincidences(
     return matches, unmatched_primary, unmatched_secondary
 
 
-def coincidence_record(
-    match: CoincidenceMatch,
+def verified_track_record(
+    match: VerifiedTrackMatch,
     primary_record: dict,
     secondary_record: dict,
     camera_settings: dict,
     track: dict | None = None,
 ) -> dict:
     return {
-        "event_type": "coincidence_candidate",
+        "event_type": "verified_track_candidate",
         "timestamp": utc_timestamp_ms(),
         "frame_index": min(match.primary.frame_index, match.secondary.frame_index),
         "frame_delta": match.frame_delta,
         "centroid_distance_pixels": round(match.centroid_distance_pixels, 3),
         "simulated": match.primary.simulated or match.secondary.simulated,
-        "confidence_class": "coincidence",
+        "confidence_class": "verified_track",
         "candidate_quality_score": 1.0,
         "artifact_risk_score": 0.0,
         "camera_settings": camera_settings,
@@ -83,7 +83,7 @@ def coincidence_record(
         },
         "notes": [
             "paired transient detected on two independent sensors",
-            "coincidence strongly suppresses single-sensor noise",
+            "verification strongly suppresses single-sensor noise",
         ],
     }
 

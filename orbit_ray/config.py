@@ -42,7 +42,7 @@ class ScoringConfig:
 
 
 @dataclass
-class CoincidenceConfig:
+class VerificationConfig:
     enabled: bool = False
     max_frame_delta: int = 1
     max_centroid_distance_pixels: float = 12.0
@@ -91,7 +91,7 @@ class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     secondary_camera: CameraConfig = field(default_factory=lambda: CameraConfig(index=1, label="sensor_1"))
     detection: DetectionConfig = field(default_factory=DetectionConfig)
-    coincidence: CoincidenceConfig = field(default_factory=CoincidenceConfig)
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
     track_reconstruction: TrackReconstructionConfig = field(default_factory=TrackReconstructionConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     output: OutputConfig = field(default_factory=OutputConfig)

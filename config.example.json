@@ -29,7 +29,7 @@
     "recurring_coordinate_window_frames": 10000,
     "recurring_coordinate_mask_radius_pixels": 1
   },
-  "coincidence": {
+  "verification": {
     "enabled": false,
     "max_frame_delta": 1,
     "max_centroid_distance_pixels": 12.0,

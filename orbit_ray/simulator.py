@@ -27,10 +27,11 @@ class SimulationInjector:
         y = random.randint(1, max(1, h - 2))
         x = random.randint(1, max(1, w - 2))
         size = random.randint(1, max(1, self.max_cluster_pixels))
-        offsets = [(0, 0), (0, 1), (1, 0), (1, 1), (-1, 0), (0, -1)]
-        random.shuffle(offsets)
+        neighbor_offsets = [(0, 1), (1, 0), (-1, 0), (0, -1)]
+        random.shuffle(neighbor_offsets)
+        offsets = [(0, 0), *neighbor_offsets[: max(0, size - 1)]]
         coords: set[tuple[int, int]] = set()
-        for dy, dx in offsets[:size]:
+        for dy, dx in offsets:
             yy = min(max(0, y + dy), h - 1)
             xx = min(max(0, x + dx), w - 1)
             gray[yy, xx] = self.intensity

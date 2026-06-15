@@ -14,7 +14,7 @@ from orbit_ray.detector import (
     detect_clusters,
     verify_candidate,
 )
-from orbit_ray.coincidence import coincidence_record, match_coincidences
+from orbit_ray.verification import verified_track_record, match_verified_tracks
 from orbit_ray.cli import should_print_status
 from orbit_ray.config import load_config
 from orbit_ray.safety import SensorSafetyState, evaluate_frame_safety
@@ -153,7 +153,7 @@ def test_scoring_adds_quality_risk_and_confidence_class():
 def test_config_defaults_to_single_sensor_with_secondary_available():
     config = load_config(None)
 
-    assert not config.coincidence.enabled
+    assert not config.verification.enabled
     assert config.camera.index == 0
     assert config.secondary_camera.index == 1
     assert config.safety.enabled
@@ -168,7 +168,7 @@ def test_zero_candidate_status_printing_is_suppressed_after_ttl():
         "counters": {
             "sensor_candidates": 0,
             "verified_sensor_events": 0,
-            "coincidence_events": 0,
+            "verified_track_events": 0,
             "unmatched_sensor_events": 0,
             "persistent_dropped": 0,
             "dynamic_mask_additions": 0,
@@ -186,7 +186,7 @@ def test_status_printing_continues_after_ttl_when_candidates_exist():
         "counters": {
             "sensor_candidates": 1,
             "verified_sensor_events": 0,
-            "coincidence_events": 0,
+            "verified_track_events": 0,
             "unmatched_sensor_events": 0,
             "persistent_dropped": 0,
             "dynamic_mask_additions": 0,
@@ -242,7 +242,7 @@ def test_safety_monitor_accepts_clean_dark_frames():
 
 
 
-def test_coincidence_matching_pairs_nearby_dual_sensor_events():
+def test_verification_matching_pairs_nearby_dual_sensor_events():
     static = np.zeros((8, 8), dtype=bool)
     dynamic = np.zeros_like(static)
     top = np.zeros((8, 8), dtype=np.uint8)
@@ -253,7 +253,7 @@ def test_coincidence_matching_pairs_nearby_dual_sensor_events():
     top_event = detect_clusters(top, static, dynamic, 200, 12, 10, sensor_label="top")[0]
     bottom_event = detect_clusters(bottom, static, dynamic, 200, 12, 10, sensor_label="bottom")[0]
 
-    matches, unmatched_top, unmatched_bottom = match_coincidences(
+    matches, unmatched_top, unmatched_bottom = match_verified_tracks(
         [top_event],
         [bottom_event],
         max_frame_delta=1,
@@ -263,9 +263,9 @@ def test_coincidence_matching_pairs_nearby_dual_sensor_events():
     assert len(matches) == 1
     assert not unmatched_top
     assert not unmatched_bottom
-    record = coincidence_record(matches[0], top_event.to_record(0, 0, {}), bottom_event.to_record(0, 0, {}), {})
-    assert record["event_type"] == "coincidence_candidate"
-    assert record["confidence_class"] == "coincidence"
+    record = verified_track_record(matches[0], top_event.to_record(0, 0, {}), bottom_event.to_record(0, 0, {}), {})
+    assert record["event_type"] == "verified_track_candidate"
+    assert record["confidence_class"] == "verified_track"
 
 
 def test_calibration_template_round_trips(tmp_path):
@@ -287,7 +287,7 @@ def test_reconstruct_track_returns_local_sky_direction():
     bottom[4, 3] = 255
     top_event = detect_clusters(top, static, dynamic, 200, 1, 10, sensor_label="top")[0]
     bottom_event = detect_clusters(bottom, static, dynamic, 200, 1, 10, sensor_label="bottom")[0]
-    matches, _, _ = match_coincidences([top_event], [bottom_event], 1, 5)
+    matches, _, _ = match_verified_tracks([top_event], [bottom_event], 1, 5)
     calibration = DetectorCalibration()
     calibration.geometry.active_width_px = 8
     calibration.geometry.active_height_px = 8

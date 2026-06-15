@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .coincidence import CoincidenceMatch
+from .verification import VerifiedTrackMatch
 
 
 @dataclass
@@ -49,7 +49,7 @@ class DetectorCalibration:
     notes: list[str] = field(default_factory=lambda: [
         "Orient the detector so yaw_degrees_from_true_north describes the top sensor +Y pixel axis.",
         "Use identical stacked sensors for the first pass; alignment can be refined later.",
-        "Pixel coordinates are converted to local sky direction for coincidence candidates only.",
+        "Pixel coordinates are converted to local sky direction for verification candidates only.",
         "Pitch and roll are recorded for the model, but the first reconstruction pass applies yaw only.",
     ])
     site: SiteCalibration = field(default_factory=SiteCalibration)
@@ -72,7 +72,7 @@ def load_detector_calibration(path: str | Path) -> DetectorCalibration:
     return _from_dict(DetectorCalibration(), data)
 
 
-def reconstruct_track(match: CoincidenceMatch, calibration: DetectorCalibration) -> dict[str, Any]:
+def reconstruct_track(match: VerifiedTrackMatch, calibration: DetectorCalibration) -> dict[str, Any]:
     top_event, bottom_event = _ordered_events(match, calibration)
     top_x_mm, top_y_mm = _pixel_to_sensor_mm(
         top_event.centroid_x,
@@ -115,7 +115,7 @@ def reconstruct_track(match: CoincidenceMatch, calibration: DetectorCalibration)
     }
 
 
-def _ordered_events(match: CoincidenceMatch, calibration: DetectorCalibration):
+def _ordered_events(match: VerifiedTrackMatch, calibration: DetectorCalibration):
     if match.primary.sensor_label == calibration.pose.top_sensor_label:
         return match.primary, match.secondary
     if match.secondary.sensor_label == calibration.pose.top_sensor_label:

@@ -3,7 +3,7 @@
   "notes": [
     "Orient the detector so yaw_degrees_from_true_north describes the top sensor +Y pixel axis.",
     "Use identical stacked sensors for the first pass; alignment can be refined later.",
-    "Pixel coordinates are converted to local sky direction for coincidence candidates only.",
+    "Pixel coordinates are converted to local sky direction for verification candidates only.",
     "Pitch and roll are recorded for the model, but the first reconstruction pass applies yaw only."
   ],
   "site": {
