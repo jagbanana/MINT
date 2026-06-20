@@ -47,6 +47,11 @@ class VerificationConfig:
     max_frame_delta: int = 1
     max_centroid_distance_pixels: float = 12.0
     log_unmatched_sensor_events: bool = True
+    log_near_miss_events: bool = False
+    near_miss_max_frame_delta: int = 600
+    near_miss_max_centroid_distance_pixels: float = 600.0
+    near_miss_history_frames: int = 1200
+    near_miss_max_records_per_cycle: int = 5
 
 
 @dataclass

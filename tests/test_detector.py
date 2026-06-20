@@ -15,7 +15,7 @@ from orbit_ray.detector import (
     verify_candidate,
 )
 from orbit_ray.verification import verified_track_record, match_verified_tracks
-from orbit_ray.cli import should_print_status
+from orbit_ray.cli import find_verified_history_matches, should_print_status
 from orbit_ray.config import load_config
 from orbit_ray.safety import SensorSafetyState, evaluate_frame_safety
 from orbit_ray.scoring import score_event
@@ -266,6 +266,52 @@ def test_verification_matching_pairs_nearby_dual_sensor_events():
     record = verified_track_record(matches[0], top_event.to_record(0, 0, {}), bottom_event.to_record(0, 0, {}), {})
     assert record["event_type"] == "verified_track_candidate"
     assert record["confidence_class"] == "verified_track"
+
+
+def test_history_matching_pairs_cross_cycle_events_within_gate():
+    static = np.zeros((8, 8), dtype=bool)
+    dynamic = np.zeros_like(static)
+    top = np.zeros((8, 8), dtype=np.uint8)
+    bottom = np.zeros((8, 8), dtype=np.uint8)
+    top[4, 4] = 255
+    bottom[4, 5] = 255
+
+    top_event = detect_clusters(top, static, dynamic, 200, 100, 10, sensor_label="top")[0]
+    bottom_event = detect_clusters(bottom, static, dynamic, 200, 101, 10, sensor_label="bottom")[0]
+    top_record = top_event.to_record(0, 0, {})
+    bottom_record = bottom_event.to_record(0, 0, {})
+
+    matches = find_verified_history_matches(
+        sensors=[],
+        current_events=[bottom_event],
+        records_by_event_id={id(bottom_event): bottom_record},
+        history={"top": [(top_event, top_record)]},
+        max_frame_delta=1,
+        max_centroid_distance_pixels=2.0,
+        verified_event_keys=set(),
+    )
+
+    assert len(matches) == 0
+
+    class Sensor:
+        def __init__(self, label):
+            self.label = label
+
+    matches = find_verified_history_matches(
+        sensors=[Sensor("top"), Sensor("bottom")],
+        current_events=[bottom_event],
+        records_by_event_id={id(bottom_event): bottom_record},
+        history={"top": [(top_event, top_record)]},
+        max_frame_delta=1,
+        max_centroid_distance_pixels=2.0,
+        verified_event_keys=set(),
+    )
+
+    assert len(matches) == 1
+    match, primary_record, secondary_record = matches[0]
+    assert match.frame_delta == 1
+    assert primary_record is bottom_record
+    assert secondary_record is top_record
 
 
 def test_calibration_template_round_trips(tmp_path):

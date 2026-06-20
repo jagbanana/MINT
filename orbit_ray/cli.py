@@ -8,7 +8,13 @@ import time
 import numpy as np
 
 from .calibration import load_detector_calibration, reconstruct_track, write_calibration_template
-from .verification import match_verified_tracks, verified_track_record
+from .verification import (
+    VerifiedTrackMatch,
+    centroid_distance,
+    match_verified_tracks,
+    near_miss_record,
+    verified_track_record,
+)
 from .config import AppConfig, CameraConfig, load_config
 from .detector import (
     CalibrationSummary,
@@ -98,12 +104,16 @@ def main(argv: list[str] | None = None) -> int:
         "sensor_candidates": 0,
         "verified_sensor_events": 0,
         "verified_track_events": 0,
+        "verification_near_miss_events": 0,
         "unmatched_sensor_events": 0,
         "persistent_dropped": 0,
         "dynamic_mask_additions": 0,
         "recurring_dropped": 0,
     }
     recent_events: list[dict] = []
+    verification_history: dict[str, list[tuple[CandidateEvent, dict]]] = {}
+    verified_event_keys: set[tuple[str, int, float, float]] = set()
+    logged_near_miss_pairs: set[tuple[str, int, str, int]] = set()
     start = time.monotonic()
     last_status = start
 
@@ -161,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
                     event_log,
                     counters,
                     detector_calibration,
+                    verification_history,
+                    verified_event_keys,
+                    logged_near_miss_pairs,
                 )
             else:
                 new_records = []
@@ -399,6 +412,9 @@ def log_verification_results(
     event_log: Path,
     counters: dict,
     detector_calibration,
+    verification_history: dict[str, list[tuple[CandidateEvent, dict]]] | None = None,
+    verified_event_keys: set[tuple[str, int, float, float]] | None = None,
+    logged_near_miss_pairs: set[tuple[str, int, str, int]] | None = None,
 ) -> list[dict]:
     primary = sensors[0]
     secondary = sensors[1]
@@ -413,18 +429,75 @@ def log_verification_results(
         primary.label: primary.camera_settings,
         secondary.label: secondary.camera_settings,
     }
-    for match in matches:
-        track = reconstruct_track(match, detector_calibration) if detector_calibration else None
-        record = verified_track_record(
+    match_records: list[tuple[VerifiedTrackMatch, dict, dict]] = [
+        (
             match,
             records_by_event_id[id(match.primary)],
             records_by_event_id[id(match.secondary)],
+        )
+        for match in matches
+    ]
+    for match in matches:
+        if verified_event_keys is not None:
+            verified_event_keys.add(event_key(match.primary))
+            verified_event_keys.add(event_key(match.secondary))
+
+    if verification_history is not None:
+        history_matches = find_verified_history_matches(
+            sensors=sensors,
+            current_events=unmatched_primary + unmatched_secondary,
+            records_by_event_id=records_by_event_id,
+            history=verification_history,
+            max_frame_delta=config.verification.max_frame_delta,
+            max_centroid_distance_pixels=config.verification.max_centroid_distance_pixels,
+            verified_event_keys=verified_event_keys,
+        )
+        matched_current_ids: set[int] = set()
+        for match, primary_record, secondary_record in history_matches:
+            matched_current_ids.add(id(match.primary))
+            matched_current_ids.add(id(match.secondary))
+            match_records.append((match, primary_record, secondary_record))
+            if verified_event_keys is not None:
+                verified_event_keys.add(event_key(match.primary))
+                verified_event_keys.add(event_key(match.secondary))
+        unmatched_primary = [event for event in unmatched_primary if id(event) not in matched_current_ids]
+        unmatched_secondary = [event for event in unmatched_secondary if id(event) not in matched_current_ids]
+
+    for match, primary_record, secondary_record in match_records:
+        track = reconstruct_track(match, detector_calibration) if detector_calibration else None
+        record = verified_track_record(
+            match,
+            primary_record,
+            secondary_record,
             camera_settings,
             track,
         )
         append_jsonl(event_log, record)
         counters["verified_track_events"] += 1
         written.append(record)
+
+    if config.verification.log_near_miss_events and verification_history is not None:
+        near_misses = find_near_misses(
+            sensors=sensors,
+            current_events=unmatched_primary + unmatched_secondary,
+            records_by_event_id=records_by_event_id,
+            history=verification_history,
+            max_frame_delta=config.verification.near_miss_max_frame_delta,
+            max_centroid_distance_pixels=config.verification.near_miss_max_centroid_distance_pixels,
+            max_records=config.verification.near_miss_max_records_per_cycle,
+            logged_pairs=logged_near_miss_pairs,
+        )
+        for primary_event, secondary_event, primary_record, secondary_record in near_misses:
+            record = near_miss_record(
+                primary_event,
+                secondary_event,
+                primary_record,
+                secondary_record,
+                camera_settings,
+            )
+            append_jsonl(event_log, record)
+            counters["verification_near_miss_events"] += 1
+            written.append(record)
 
     if config.verification.log_unmatched_sensor_events:
         for candidate in unmatched_primary + unmatched_secondary:
@@ -433,7 +506,139 @@ def log_verification_results(
             append_jsonl(event_log, record)
             counters["unmatched_sensor_events"] += 1
             written.append(record)
+
+    if verification_history is not None:
+        update_verification_history(
+            verification_history,
+            verified_by_sensor,
+            records_by_event_id,
+            max_history_frames=max(
+                config.verification.near_miss_history_frames,
+                config.verification.near_miss_max_frame_delta,
+                config.verification.max_frame_delta,
+            ),
+        )
     return written
+
+
+def find_verified_history_matches(
+    sensors: list[SensorRuntime],
+    current_events: list[CandidateEvent],
+    records_by_event_id: dict[int, dict],
+    history: dict[str, list[tuple[CandidateEvent, dict]]],
+    max_frame_delta: int,
+    max_centroid_distance_pixels: float,
+    verified_event_keys: set[tuple[str, int, float, float]] | None,
+) -> list[tuple[VerifiedTrackMatch, dict, dict]]:
+    if len(sensors) != 2:
+        return []
+    labels = {sensors[0].label, sensors[1].label}
+    candidates: list[tuple[int, float, CandidateEvent, CandidateEvent, dict, dict]] = []
+    for event in current_events:
+        if verified_event_keys is not None and event_key(event) in verified_event_keys:
+            continue
+        event_record = records_by_event_id[id(event)]
+        other_labels = labels - {event.sensor_label}
+        if not other_labels:
+            continue
+        other_label = next(iter(other_labels))
+        for other_event, other_record in history.get(other_label, []):
+            if verified_event_keys is not None and event_key(other_event) in verified_event_keys:
+                continue
+            frame_delta = abs(event.frame_index - other_event.frame_index)
+            if frame_delta > max_frame_delta:
+                continue
+            distance = centroid_distance(event, other_event)
+            if distance > max_centroid_distance_pixels:
+                continue
+            candidates.append((frame_delta, distance, event, other_event, event_record, other_record))
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    selected: list[tuple[VerifiedTrackMatch, dict, dict]] = []
+    used_events: set[tuple[str, int, float, float]] = set()
+    for frame_delta, distance, event, other_event, event_record, other_record in candidates:
+        current_key = event_key(event)
+        other_key = event_key(other_event)
+        if current_key in used_events or other_key in used_events:
+            continue
+        used_events.add(current_key)
+        used_events.add(other_key)
+        selected.append((VerifiedTrackMatch(event, other_event, frame_delta, distance), event_record, other_record))
+    return selected
+
+
+def find_near_misses(
+    sensors: list[SensorRuntime],
+    current_events: list[CandidateEvent],
+    records_by_event_id: dict[int, dict],
+    history: dict[str, list[tuple[CandidateEvent, dict]]],
+    max_frame_delta: int,
+    max_centroid_distance_pixels: float,
+    max_records: int,
+    logged_pairs: set[tuple[str, int, str, int]] | None,
+) -> list[tuple[CandidateEvent, CandidateEvent, dict, dict]]:
+    if len(sensors) != 2 or max_records <= 0:
+        return []
+    labels = {sensors[0].label, sensors[1].label}
+    candidates: list[tuple[int, float, CandidateEvent, CandidateEvent, dict, dict]] = []
+    for event in current_events:
+        event_record = records_by_event_id[id(event)]
+        other_labels = labels - {event.sensor_label}
+        if not other_labels:
+            continue
+        other_label = next(iter(other_labels))
+        for other_event, other_record in history.get(other_label, []):
+            frame_delta = abs(event.frame_index - other_event.frame_index)
+            if frame_delta <= 0 or frame_delta > max_frame_delta:
+                continue
+            distance = centroid_distance(event, other_event)
+            if distance > max_centroid_distance_pixels:
+                continue
+            pair_key = canonical_event_pair(event, other_event)
+            if logged_pairs is not None and pair_key in logged_pairs:
+                continue
+            candidates.append((frame_delta, distance, event, other_event, event_record, other_record))
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    selected = []
+    for _frame_delta, _distance, event, other_event, event_record, other_record in candidates:
+        pair_key = canonical_event_pair(event, other_event)
+        if logged_pairs is not None:
+            logged_pairs.add(pair_key)
+        selected.append((event, other_event, event_record, other_record))
+        if len(selected) >= max_records:
+            break
+    return selected
+
+
+def update_verification_history(
+    history: dict[str, list[tuple[CandidateEvent, dict]]],
+    verified_by_sensor: dict[str, list[CandidateEvent]],
+    records_by_event_id: dict[int, dict],
+    max_history_frames: int,
+) -> None:
+    latest_frame = 0
+    for events in verified_by_sensor.values():
+        for event in events:
+            latest_frame = max(latest_frame, event.frame_index)
+            history.setdefault(event.sensor_label, []).append((event, records_by_event_id[id(event)]))
+    if latest_frame <= 0:
+        return
+    cutoff = latest_frame - max_history_frames
+    for label, events in list(history.items()):
+        history[label] = [(event, record) for event, record in events if event.frame_index >= cutoff]
+
+
+def canonical_event_pair(first: CandidateEvent, second: CandidateEvent) -> tuple[str, int, str, int]:
+    left = (first.sensor_label, first.frame_index)
+    right = (second.sensor_label, second.frame_index)
+    if left <= right:
+        return left[0], left[1], right[0], right[1]
+    return right[0], right[1], left[0], left[1]
+
+
+def event_key(event: CandidateEvent) -> tuple[str, int, float, float]:
+    return (event.sensor_label, event.frame_index, round(event.centroid_x, 3), round(event.centroid_y, 3))
 
 
 def maybe_inject_simulation(
@@ -667,6 +872,7 @@ def print_status(status: dict) -> None:
         f"candidates={counters['sensor_candidates']} "
         f"sensor_verified={counters['verified_sensor_events']} "
         f"verified_tracks={counters['verified_track_events']} "
+        f"near_misses={counters.get('verification_near_miss_events', 0)} "
         f"unmatched={counters['unmatched_sensor_events']} "
         f"persistent={counters['persistent_dropped']} "
         f"recurring={counters.get('recurring_dropped', 0)} "

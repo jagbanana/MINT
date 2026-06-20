@@ -88,5 +88,49 @@ def verified_track_record(
     }
 
 
+def near_miss_record(
+    primary: CandidateEvent,
+    secondary: CandidateEvent,
+    primary_record: dict,
+    secondary_record: dict,
+    camera_settings: dict,
+) -> dict:
+    frame_delta = abs(primary.frame_index - secondary.frame_index)
+    time_delta_seconds = None
+    if primary.timestamp and secondary.timestamp:
+        try:
+            from datetime import datetime
+
+            primary_ts = datetime.fromisoformat(primary.timestamp.replace("Z", "+00:00"))
+            secondary_ts = datetime.fromisoformat(secondary.timestamp.replace("Z", "+00:00"))
+            time_delta_seconds = abs((primary_ts - secondary_ts).total_seconds())
+        except ValueError:
+            time_delta_seconds = None
+
+    record = {
+        "event_type": "verification_near_miss",
+        "timestamp": utc_timestamp_ms(),
+        "frame_index": min(primary.frame_index, secondary.frame_index),
+        "frame_delta": frame_delta,
+        "centroid_distance_pixels": round(centroid_distance(primary, secondary), 3),
+        "simulated": primary.simulated or secondary.simulated,
+        "confidence_class": "near_miss",
+        "candidate_quality_score": 0.0,
+        "artifact_risk_score": 1.0,
+        "camera_settings": camera_settings,
+        "sensors": {
+            primary.sensor_label: primary_record,
+            secondary.sensor_label: secondary_record,
+        },
+        "notes": [
+            "diagnostic only: paired sensor events are outside verified-track gate",
+            "use frame_delta/time_delta distributions to diagnose synchronization or geometry",
+        ],
+    }
+    if time_delta_seconds is not None:
+        record["time_delta_seconds"] = round(time_delta_seconds, 6)
+    return record
+
+
 def centroid_distance(primary: CandidateEvent, secondary: CandidateEvent) -> float:
     return math.hypot(primary.centroid_x - secondary.centroid_x, primary.centroid_y - secondary.centroid_y)
