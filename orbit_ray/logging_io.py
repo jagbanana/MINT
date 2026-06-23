@@ -10,9 +10,11 @@ def ensure_output_dirs(output_dir: Path) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     crops = output_dir / "crops"
     snapshots = output_dir / "snapshots"
+    verified_track_raws = output_dir / "verified_track_raws"
     crops.mkdir(exist_ok=True)
     snapshots.mkdir(exist_ok=True)
-    return {"root": output_dir, "crops": crops, "snapshots": snapshots}
+    verified_track_raws.mkdir(exist_ok=True)
+    return {"root": output_dir, "crops": crops, "snapshots": snapshots, "verified_track_raws": verified_track_raws}
 
 
 def append_jsonl(path: Path, record: dict[str, Any]) -> None:

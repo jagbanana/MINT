@@ -112,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     recent_events: list[dict] = []
     verification_history: dict[str, list[tuple[CandidateEvent, dict]]] = {}
+    verification_frame_history: dict[str, list[tuple[CandidateEvent, np.ndarray]]] = {}
     verified_event_keys: set[tuple[str, int, float, float]] = set()
     logged_near_miss_pairs: set[tuple[str, int, str, int]] = set()
     start = time.monotonic()
@@ -135,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
 
             verified_by_sensor: dict[str, list[CandidateEvent]] = {}
             records_by_event_id: dict[int, dict] = {}
+            frames_by_event_id: dict[int, np.ndarray] = {}
 
             for sensor in sensors:
                 verified = verify_pending_events(
@@ -150,10 +152,12 @@ def main(argv: list[str] | None = None) -> int:
                     if maybe_drop_recurring_candidate(sensor, candidate, config, counters):
                         continue
                     kept_verified.append(candidate)
+                    candidate_frame = get_candidate_frame(sensor, candidate)
+                    frames_by_event_id[id(candidate)] = candidate_frame
                     records_by_event_id[id(candidate)] = build_sensor_event_record(
                         sensor=sensor,
                         candidate=candidate,
-                        candidate_frame=get_candidate_frame(sensor, candidate),
+                        candidate_frame=candidate_frame,
                         crops_dir=paths["crops"],
                         config=config,
                         counters=counters,
@@ -169,9 +173,12 @@ def main(argv: list[str] | None = None) -> int:
                     records_by_event_id,
                     config,
                     event_log,
+                    paths["verified_track_raws"],
                     counters,
                     detector_calibration,
                     verification_history,
+                    verification_frame_history,
+                    frames_by_event_id,
                     verified_event_keys,
                     logged_near_miss_pairs,
                 )
@@ -410,9 +417,12 @@ def log_verification_results(
     records_by_event_id: dict[int, dict],
     config: AppConfig,
     event_log: Path,
+    verified_track_raws_dir: Path,
     counters: dict,
     detector_calibration,
     verification_history: dict[str, list[tuple[CandidateEvent, dict]]] | None = None,
+    verification_frame_history: dict[str, list[tuple[CandidateEvent, np.ndarray]]] | None = None,
+    frames_by_event_id: dict[int, np.ndarray] | None = None,
     verified_event_keys: set[tuple[str, int, float, float]] | None = None,
     logged_near_miss_pairs: set[tuple[str, int, str, int]] | None = None,
 ) -> list[dict]:
@@ -464,6 +474,15 @@ def log_verification_results(
         unmatched_secondary = [event for event in unmatched_secondary if id(event) not in matched_current_ids]
 
     for match, primary_record, secondary_record in match_records:
+        if config.output.save_verified_track_raws:
+            attach_verified_track_raw_paths(
+                match=match,
+                primary_record=primary_record,
+                secondary_record=secondary_record,
+                raw_dir=verified_track_raws_dir,
+                current_frames=frames_by_event_id or {},
+                history_frames=verification_frame_history or {},
+            )
         track = reconstruct_track(match, detector_calibration) if detector_calibration else None
         record = verified_track_record(
             match,
@@ -508,16 +527,24 @@ def log_verification_results(
             written.append(record)
 
     if verification_history is not None:
+        max_history_frames = max(
+            config.verification.near_miss_history_frames,
+            config.verification.near_miss_max_frame_delta,
+            config.verification.max_frame_delta,
+        )
         update_verification_history(
             verification_history,
             verified_by_sensor,
             records_by_event_id,
-            max_history_frames=max(
-                config.verification.near_miss_history_frames,
-                config.verification.near_miss_max_frame_delta,
-                config.verification.max_frame_delta,
-            ),
+            max_history_frames=max_history_frames,
         )
+        if verification_frame_history is not None and frames_by_event_id is not None:
+            update_verification_frame_history(
+                verification_frame_history,
+                verified_by_sensor,
+                frames_by_event_id,
+                max_history_frames=max_history_frames,
+            )
     return written
 
 
@@ -627,6 +654,66 @@ def update_verification_history(
     cutoff = latest_frame - max_history_frames
     for label, events in list(history.items()):
         history[label] = [(event, record) for event, record in events if event.frame_index >= cutoff]
+
+
+def update_verification_frame_history(
+    history: dict[str, list[tuple[CandidateEvent, np.ndarray]]],
+    verified_by_sensor: dict[str, list[CandidateEvent]],
+    frames_by_event_id: dict[int, np.ndarray],
+    max_history_frames: int,
+) -> None:
+    latest_frame = 0
+    for events in verified_by_sensor.values():
+        for event in events:
+            latest_frame = max(latest_frame, event.frame_index)
+            frame = frames_by_event_id.get(id(event))
+            if frame is not None:
+                history.setdefault(event.sensor_label, []).append((event, frame))
+    if latest_frame <= 0:
+        return
+    cutoff = latest_frame - max_history_frames
+    for label, events in list(history.items()):
+        history[label] = [(event, frame) for event, frame in events if event.frame_index >= cutoff]
+
+
+def attach_verified_track_raw_paths(
+    match: VerifiedTrackMatch,
+    primary_record: dict,
+    secondary_record: dict,
+    raw_dir: Path,
+    current_frames: dict[int, np.ndarray],
+    history_frames: dict[str, list[tuple[CandidateEvent, np.ndarray]]],
+) -> None:
+    primary_frame = find_event_frame(match.primary, current_frames, history_frames)
+    secondary_frame = find_event_frame(match.secondary, current_frames, history_frames)
+    if primary_frame is not None:
+        primary_record["raw_frame_path"] = save_raw_frame(raw_dir, primary_frame, match.primary)
+    if secondary_frame is not None:
+        secondary_record["raw_frame_path"] = save_raw_frame(raw_dir, secondary_frame, match.secondary)
+
+
+def find_event_frame(
+    event: CandidateEvent,
+    current_frames: dict[int, np.ndarray],
+    history_frames: dict[str, list[tuple[CandidateEvent, np.ndarray]]],
+) -> np.ndarray | None:
+    frame = current_frames.get(id(event))
+    if frame is not None:
+        return frame
+    target_key = event_key(event)
+    for history_event, history_frame in history_frames.get(event.sensor_label, []):
+        if event_key(history_event) == target_key:
+            return history_frame
+    return None
+
+
+def save_raw_frame(raw_dir: Path, frame: np.ndarray, candidate: CandidateEvent) -> str:
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    stamp = candidate.timestamp.replace(":", "").replace(".", "")
+    sim = "sim" if candidate.simulated else "real"
+    path = raw_dir / f"{stamp}_{candidate.sensor_label}_frame{candidate.frame_index}_{sim}.npy"
+    np.save(path, np.asarray(frame, dtype=np.uint8))
+    return str(path)
 
 
 def canonical_event_pair(first: CandidateEvent, second: CandidateEvent) -> tuple[str, int, str, int]:

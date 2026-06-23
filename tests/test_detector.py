@@ -15,7 +15,7 @@ from orbit_ray.detector import (
     verify_candidate,
 )
 from orbit_ray.verification import verified_track_record, match_verified_tracks
-from orbit_ray.cli import find_verified_history_matches, should_print_status
+from orbit_ray.cli import attach_verified_track_raw_paths, find_verified_history_matches, should_print_status
 from orbit_ray.config import load_config
 from orbit_ray.safety import SensorSafetyState, evaluate_frame_safety
 from orbit_ray.scoring import score_event
@@ -266,6 +266,35 @@ def test_verification_matching_pairs_nearby_dual_sensor_events():
     record = verified_track_record(matches[0], top_event.to_record(0, 0, {}), bottom_event.to_record(0, 0, {}), {})
     assert record["event_type"] == "verified_track_candidate"
     assert record["confidence_class"] == "verified_track"
+
+
+def test_verified_track_raw_paths_are_attached_for_current_and_history_frames(tmp_path):
+    static = np.zeros((8, 8), dtype=bool)
+    dynamic = np.zeros_like(static)
+    top = np.zeros((8, 8), dtype=np.uint8)
+    bottom = np.zeros((8, 8), dtype=np.uint8)
+    top[4, 4] = 255
+    bottom[4, 5] = 255
+
+    top_event = detect_clusters(top, static, dynamic, 200, 12, 10, sensor_label="top")[0]
+    bottom_event = detect_clusters(bottom, static, dynamic, 200, 13, 10, sensor_label="bottom")[0]
+    matches, _, _ = match_verified_tracks([top_event], [bottom_event], 1, 2.0)
+    top_record = top_event.to_record(0, 0, {})
+    bottom_record = bottom_event.to_record(0, 0, {})
+
+    attach_verified_track_raw_paths(
+        match=matches[0],
+        primary_record=top_record,
+        secondary_record=bottom_record,
+        raw_dir=tmp_path,
+        current_frames={id(bottom_event): bottom},
+        history_frames={"top": [(top_event, top)]},
+    )
+
+    assert top_record["raw_frame_path"].endswith(".npy")
+    assert bottom_record["raw_frame_path"].endswith(".npy")
+    assert np.load(top_record["raw_frame_path"])[4, 4] == 255
+    assert np.load(bottom_record["raw_frame_path"])[4, 5] == 255
 
 
 def test_history_matching_pairs_cross_cycle_events_within_gate():

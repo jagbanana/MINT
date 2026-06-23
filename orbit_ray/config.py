@@ -66,6 +66,7 @@ class OutputConfig:
     event_log: str = "cosmic_events.jsonl"
     save_crops: bool = True
     crop_radius: int = 12
+    save_verified_track_raws: bool = False
     status_interval_seconds: int = 5
     zero_candidate_status_ttl_seconds: float = 14400.0
 

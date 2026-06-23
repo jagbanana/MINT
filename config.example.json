@@ -52,6 +52,7 @@
     "event_log": "cosmic_events.jsonl",
     "save_crops": true,
     "crop_radius": 12,
+    "save_verified_track_raws": false,
     "status_interval_seconds": 5,
     "zero_candidate_status_ttl_seconds": 14400.0
   },
