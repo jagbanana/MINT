@@ -20,6 +20,8 @@ See a detector in action at [https://mint.jaglab.org](https://mint.jaglab.org).
 
 Muons are secondary particles created by nature's particle collider: high-energy cosmic rays colliding with protons and neutrons in the upper atmosphere, breaking them into subatomic particles. Muons carry an electric charge identical to an electron or positron but with 200 times the mass. As these heavy, charged particles pass through a silicon sensor at 99.9% the speed of light, their powerful electromagnetic field frees electrons from silicon atoms along the path, generating a hit on the camera.
 
+![MINT verified track](images/mint_verified_track.png)
+
 A small home particle detector can log a local record of candidate muon hit patterns, directions, and rates correlated with atmospheric and cosmic events. While we know many cosmic rays originate from solar flares and supernovae, the ultimate sources of the most energetic particles remain a mystery. Engaging in low-cost, distributed data collection helps bridge the gap in our understanding of these deep-space accelerators.
 
 MINT is a tiny way to touch that mystery from a desk, server shelf, garage, or spare laptop. It lets you build a listening post and can help contribute to our collective understanding of these high-energy events.
