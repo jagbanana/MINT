@@ -431,10 +431,29 @@ By default, MINT writes runtime output to `orbit_ray_output/`:
 * `cosmic_events.jsonl`
 * `crops/*.png`
 * `snapshots/latest_status.json`
+* `verified_track_raws/*.npy` when `output.save_verified_track_raws` is enabled.
 
 MINT only writes candidate records to `cosmic_events.jsonl`; routine zero-candidate status is printed to stdout and `latest_status.json` is overwritten in place. To avoid unbounded captured-log growth, zero-candidate status printing is suppressed after `output.zero_candidate_status_ttl_seconds` (default: 4 hours). Candidate, verified, verification, unmatched, persistent, or dynamic-mask activity keeps status printing enabled.
 
 Runtime output is ignored by Git.
+
+### Converting verified-track raw frames to FITS
+
+When full-frame raw capture is enabled, MINT preserves the original NumPy arrays in `verified_track_raws/*.npy`. To create PixInsight-friendly FITS copies without modifying the originals, run:
+
+```powershell
+python scripts/npy_to_fits.py orbit_ray_output/two_cam/verified_track_raws
+```
+
+The converter writes `.fits` files next to each `.npy` by default. It uses only NumPy and a small built-in FITS primary-HDU writer, so it does not require Astropy or fitsio.
+
+Useful options:
+
+```powershell
+python scripts/npy_to_fits.py frame.npy --output-dir fits
+python scripts/npy_to_fits.py frame.npy --overwrite
+python scripts/npy_to_fits.py orbit_ray_output/two_cam/verified_track_raws --recursive
+```
 
 Single-sensor events remain useful in two-sensor mode. They are not strong particle evidence on their own, but they help characterize each sensor and can be scrubbed or filtered later during analysis.
 
